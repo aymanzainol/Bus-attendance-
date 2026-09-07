@@ -39,6 +39,10 @@ Two tabs only:
   حاضر / غائب per day) and `Log` (every scan with time). The PDF contains the
   summary and the daily grid (split into blocks of days so it always fits).
   Weeks start on Sunday (`WEEK_START` in `static/app.js`).
+* Dates in the reports and in the app's history are shown in the **Hijri**
+  calendar (Umm al-Qura, via `hijridate`), with the Gregorian date kept in
+  brackets and in dedicated Excel columns. Records are stored as Gregorian
+  ISO dates, so nothing changes in the database or the API.
 
 ## Run locally
 

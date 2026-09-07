@@ -14,6 +14,7 @@ from flask import Flask, g, jsonify, request, send_file, send_from_directory
 
 import arabic_reshaper
 from bidi.algorithm import get_display
+from hijridate import Gregorian
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(BASE_DIR, "data"))
@@ -60,6 +61,9 @@ STRINGS = {
         "status": "الحالة",
         "time_in": "وقت الحضور",
         "day": "اليوم",
+        "date_hijri": "التاريخ الهجري",
+        "date_greg": "التاريخ الميلادي",
+        "hijri_lang": "ar",
         "weekdays": ["الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد"],
         "no": "الرقم",
         "national_id": "رقم الهوية الوطنية",
@@ -112,6 +116,9 @@ STRINGS = {
         "status": "Status",
         "time_in": "Time in",
         "day": "Day",
+        "date_hijri": "Hijri date",
+        "date_greg": "Gregorian date",
+        "hijri_lang": "en",
         "weekdays": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
         "no": "No",
         "national_id": "National ID",
@@ -159,9 +166,21 @@ def weekday_name(day_iso, T):
     return T["weekdays"][date.fromisoformat(day_iso).weekday()]
 
 
-def day_label(day_iso, T, sep=" "):
-    """'الأحد 2026-09-07' (or 'Sunday 2026-09-07')."""
-    return f"{weekday_name(day_iso, T)}{sep}{day_iso}"
+def hijri(day_iso, T, year=True):
+    """Umm al-Qura Hijri date: '25 ربيع الأول 1448هـ' / '25 Rabi al-Awwal 1448 AH'."""
+    d = date.fromisoformat(day_iso)
+    h = Gregorian(d.year, d.month, d.day).to_hijri()
+    lang = T["hijri_lang"]
+    month = h.month_name(lang).replace("\u2019", "")
+    if not year:
+        return f"{h.day} {month}"
+    return f"{h.day} {month} {h.year}هـ" if lang == "ar" else f"{h.day} {month} {h.year} AH"
+
+
+def day_label(day_iso, T, sep=" ", greg=True):
+    """'الأحد 25 ربيع الأول 1448هـ (2026-09-07)' - weekday, Hijri date and, optionally, the Gregorian date."""
+    base = f"{weekday_name(day_iso, T)}{sep}{hijri(day_iso, T)}"
+    return f"{base} ({day_iso})" if greg else base
 
 
 _pdf_fonts_ready = False
@@ -629,7 +648,7 @@ def export_excel():
     ws.append([f"{T['school_days']}: {n_days}    {T['students']}: {len(report['students'])}    {T['generated']}: {report['generated']}"])
     ws.append([])
     if daily:
-        ws.append([T["no"], T["national_id"], T["name"], T["grade"], T["bus"], T["parent_phone"], T["day"], T["date"], T["status"], T["time_in"]])
+        ws.append([T["no"], T["national_id"], T["name"], T["grade"], T["bus"], T["parent_phone"], T["day"], T["date_hijri"], T["date_greg"], T["status"], T["time_in"]])
     else:
         ws.append([T["no"], T["national_id"], T["name"], T["grade"], T["bus"], T["parent_phone"], T["days_present"], T["days_absent"], T["pct"]])
     style_header(ws, 4)
@@ -637,27 +656,27 @@ def export_excel():
         marks = report["by_student"].get(s["id"], {})
         if daily:
             here = start in marks
-            ws.append([i, s["national_id"], s["name"], s["grade"], s["bus_no"], s["parent_phone"], weekday_name(start, T), start, T["mark_present"] if here else T["mark_absent"], marks.get(start, "")])
-            cell = ws.cell(row=ws.max_row, column=9)
+            ws.append([i, s["national_id"], s["name"], s["grade"], s["bus_no"], s["parent_phone"], weekday_name(start, T), hijri(start, T), start, T["mark_present"] if here else T["mark_absent"], marks.get(start, "")])
+            cell = ws.cell(row=ws.max_row, column=10)
             cell.alignment = center
             cell.fill = present_fill if here else absent_fill
         else:
             present = len(marks)
             pct = round(100 * present / n_days, 1) if n_days else 0
             ws.append([i, s["national_id"], s["name"], s["grade"], s["bus_no"], s["parent_phone"], present, n_days - present, pct])
-    for col, width in zip("ABCDEFGHIJ", (6, 18, 30, 12, 10, 18, 14, 14, 14, 14)):
+    for col, width in zip("ABCDEFGHIJK", (6, 18, 30, 12, 10, 18, 12, 22, 14, 12, 12)):
         ws.column_dimensions[col].width = width
     ws.freeze_panes = "A5"
 
     # Sheet 2: Daily matrix
     ws2 = wb.create_sheet(T["sheet_daily"])
     ws2.sheet_view.rightToLeft = rtl
-    header = [T["national_id"], T["name"], T["grade"], T["bus"]] + [day_label(d, T, "\n") for d in days] + [T["total"]]
+    header = [T["national_id"], T["name"], T["grade"], T["bus"]] + [f"{weekday_name(d, T)}\n{hijri(d, T)}\n{d}" for d in days] + [T["total"]]
     ws2.append(header)
     style_header(ws2)
     for j in range(5, 5 + n_days):
         ws2.cell(row=1, column=j).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    ws2.row_dimensions[1].height = 32
+    ws2.row_dimensions[1].height = 48
     for s in report["students"]:
         marks = report["by_student"].get(s["id"], {})
         row = [s["national_id"], s["name"], s["grade"], s["bus_no"]] + [T["mark_present"] if d in marks else T["mark_absent"] for d in days] + [len(marks)]
@@ -672,19 +691,19 @@ def export_excel():
     ws2.column_dimensions["C"].width = 12
     ws2.column_dimensions["D"].width = 10
     for j in range(5, 5 + n_days):
-        ws2.column_dimensions[get_column_letter(j)].width = 11
+        ws2.column_dimensions[get_column_letter(j)].width = 20
     ws2.freeze_panes = "E2"
 
     # Sheet 3: Log
     ws3 = wb.create_sheet(T["sheet_log"])
     ws3.sheet_view.rightToLeft = rtl
-    ws3.append([T["day"], T["date"], T["time"], T["national_id"], T["name"], T["grade"], T["bus"], T["method"]])
+    ws3.append([T["day"], T["date_hijri"], T["date_greg"], T["time"], T["national_id"], T["name"], T["grade"], T["bus"], T["method"]])
     style_header(ws3)
     lookup = {s["id"]: s for s in report["students"]}
     for r in report["records"]:
         s = lookup.get(r["student_id"], {})
-        ws3.append([weekday_name(r["day"], T), r["day"], r["time"], s.get("national_id", ""), s.get("name", ""), s.get("grade", ""), s.get("bus_no", ""), T.get("method_" + r["method"], r["method"])])
-    for col, width in zip("ABCDEFGH", (12, 12, 10, 18, 30, 12, 10, 10)):
+        ws3.append([weekday_name(r["day"], T), hijri(r["day"], T), r["day"], r["time"], s.get("national_id", ""), s.get("name", ""), s.get("grade", ""), s.get("bus_no", ""), T.get("method_" + r["method"], r["method"])])
+    for col, width in zip("ABCDEFGHI", (12, 22, 12, 10, 18, 30, 12, 10, 10)):
         ws3.column_dimensions[col].width = width
     ws3.freeze_panes = "A2"
 
@@ -775,8 +794,8 @@ def export_pdf():
 
     # Summary table
     if daily:
-        head = [T["no"], T["national_id"], T["name"], T["grade"], T["bus"], T["parent_phone"], T["day"], T["date"], T["status"], T["time_in"]]
-        cw = [10 * mm, 34 * mm, 62 * mm, 18 * mm, 14 * mm, 30 * mm, 22 * mm, 24 * mm, 20 * mm, 20 * mm]
+        head = [T["no"], T["national_id"], T["name"], T["grade"], T["bus"], T["parent_phone"], T["day"], T["date_hijri"], T["status"], T["time_in"]]
+        cw = [10 * mm, 34 * mm, 56 * mm, 18 * mm, 14 * mm, 30 * mm, 20 * mm, 38 * mm, 18 * mm, 18 * mm]
     else:
         head = [T["no"], T["national_id"], T["name"], T["grade"], T["bus"], T["parent_phone"], T["present"], T["absent"], "%"]
         cw = [10 * mm, 34 * mm, 70 * mm, 20 * mm, 16 * mm, 34 * mm, 20 * mm, 20 * mm, 16 * mm]
@@ -786,7 +805,7 @@ def export_pdf():
         marks = report["by_student"].get(s["id"], {})
         if daily:
             here = start in marks
-            data.append(cells([i, s["national_id"], s["name"], s["grade"], s["bus_no"], s["parent_phone"], weekday_name(start, T), start, T["mark_present"] if here else T["mark_absent"], marks.get(start, "")]))
+            data.append(cells([i, s["national_id"], s["name"], s["grade"], s["bus_no"], s["parent_phone"], weekday_name(start, T), hijri(start, T), T["mark_present"] if here else T["mark_absent"], marks.get(start, "")]))
             c = col(8, len(head))
             extra.append(("TEXTCOLOR", (c, i), (c, i), green if here else red))
             extra.append(("FONTNAME", (c, i), (c, i), font_bold))
@@ -808,9 +827,9 @@ def export_pdf():
         for b in range(0, n_days, per_block):
             block = days[b:b + per_block]
             nb = len(block)
-            head = [T["national_id"], T["name"], T["bus"]] + [f"{weekday_name(d, T)}\n{d}" for d in block] + [T["total"]]
+            head = [T["national_id"], T["name"], T["bus"]] + [f"{weekday_name(d, T)}\n{hijri(d, T, year=False)}\n{d}" for d in block] + [T["total"]]
             mdata = [cells(head)]
-            mstyle = [("FONTSIZE", (0, 0), (-1, -1), 7)]
+            mstyle = [("FONTSIZE", (0, 0), (-1, -1), 7), ("LEADING", (0, 0), (-1, 0), 11)]
             for j in range(nb):
                 c = col(3 + j, len(head))
                 mstyle.append(("ALIGN", (c, 0), (c, -1), "CENTER"))

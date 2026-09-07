@@ -48,6 +48,13 @@
   function weekdayName(iso) {
     return new Date(iso + "T00:00:00").toLocaleDateString(getLang() === "ar" ? "ar" : "en", { weekday: "long" });
   }
+  function hijriDate(iso) {
+    // Umm al-Qura calendar, Latin digits; falls back to the Gregorian date on very old browsers
+    try {
+      const loc = (getLang() === "ar" ? "ar-SA" : "en") + "-u-ca-islamic-umalqura-nu-latn";
+      return new Intl.DateTimeFormat(loc, { day: "numeric", month: "long", year: "numeric" }).format(new Date(iso + "T00:00:00"));
+    } catch (e) { return iso; }
+  }
   function monthStart() {
     return todayStr().slice(0, 8) + "01";
   }
@@ -548,7 +555,7 @@
     try {
       const data = await api(`/api/students/${id}/history`);
       $("detail-history").innerHTML = data.records.length
-        ? data.records.map((r) => `<li><span>${weekdayName(r.day)} <span class="ltr">${r.day}</span></span><span><span class="ltr">${r.time.slice(0, 5)}</span> · ${t("method_" + r.method)}</span></li>`).join("")
+        ? data.records.map((r) => `<li><span>${weekdayName(r.day)} ${hijriDate(r.day)} <span class="ltr muted">(${r.day})</span></span><span><span class="ltr">${r.time.slice(0, 5)}</span> · ${t("method_" + r.method)}</span></li>`).join("")
         : `<li class='muted'>${t("no_history")}</li>`;
     } catch (e) {
       $("detail-history").innerHTML = `<li class='muted'>${escapeHtml(e.message)}</li>`;
@@ -604,8 +611,8 @@
     $("btn-excel").href = `/api/export/excel?${q}`;
     $("btn-pdf").href = `/api/export/pdf?${q}`;
     $("range-caption").innerHTML = t("range_caption", {
-      from: `${weekdayName(from)} <span class="ltr">${from}</span>`,
-      to: `${weekdayName(to)} <span class="ltr">${to}</span>`,
+      from: `${weekdayName(from)} ${hijriDate(from)} <span class="ltr">(${from})</span>`,
+      to: `${weekdayName(to)} ${hijriDate(to)} <span class="ltr">(${to})</span>`,
     });
   }
 

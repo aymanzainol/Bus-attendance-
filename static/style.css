@@ -245,7 +245,8 @@ input[type=month] { width: 100%; margin-top: 6px; padding: 12px 14px; font-size:
 .detail-top { display: flex; gap: 14px; align-items: center; margin-bottom: 16px; }
 .detail-name { font-size: 21px; font-weight: 800; }
 .tel { color: var(--green); font-weight: 700; text-decoration: none; }
-.history li { display: flex; justify-content: space-between; padding: 9px 4px; border-bottom: 1px solid var(--border); font-size: 14px; }
+.history li { display: flex; justify-content: space-between; gap: 8px; padding: 9px 4px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.history li span:first-child { flex: 1; }
 .history li span:last-child { color: var(--muted); }
 
 /* ---------------------------------------------------------------- toast */
