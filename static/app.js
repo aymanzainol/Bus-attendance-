@@ -23,6 +23,7 @@
   let addPhoto = "";              // data URL thumbnail for the new student
   let lastAddDetection = null;    // latest detection in the add-student camera
   let detailStudent = null;
+  let busFilter = "";             // "" = all buses (Students tab + Scan tab present list)
   const recentlyMarked = new Map(); // student id -> timestamp of last post
 
   // --------------------------------------------------------------- helpers
@@ -62,6 +63,33 @@
     const cls = `avatar${big ? " big" : ""}`;
     if (s.photo) return `<img class="${cls}" src="${s.photo}" alt="">`;
     return `<div class="${cls} placeholder">${initials(s.name)}</div>`;
+  }
+  function busTag(s) {
+    return s.bus_no ? `<span class="bus-tag">🚌 ${escapeHtml(s.bus_no)}</span>` : "";
+  }
+  function busList() {
+    return [...new Set(students.map((s) => s.bus_no).filter(Boolean))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  }
+  function renderBusChips() {
+    const buses = busList();
+    const html = buses.length
+      ? [`<button class="chip${busFilter === "" ? " active" : ""}" data-bus="">All buses</button>`]
+          .concat(buses.map((b) => `<button class="chip${busFilter === b ? " active" : ""}" data-bus="${escapeHtml(b)}">🚌 Bus ${escapeHtml(b)}</button>`)).join("")
+      : "";
+    $("bus-chips").innerHTML = html;
+    $("scan-bus-chips").innerHTML = html;
+    const sel = $("export-bus");
+    const current = sel.value;
+    sel.innerHTML = `<option value="">All buses</option>` + buses.map((b) => `<option value="${escapeHtml(b)}">Bus ${escapeHtml(b)}</option>`).join("");
+    sel.value = buses.includes(current) ? current : "";
+    updateExportLinks();
+  }
+  function setBusFilter(bus) {
+    busFilter = bus;
+    renderBusChips();
+    renderStudents();
+    renderStats();
+    loadPresent();
   }
   function escapeHtml(str) {
     return String(str).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -131,30 +159,35 @@
     const data = await api(`/api/students?date=${todayStr()}`);
     students = data.students;
     rebuildMatcher();
+    renderBusChips();
     renderStudents();
     renderStats();
   }
 
+  function visibleStudents() {
+    return busFilter ? students.filter((s) => s.bus_no === busFilter) : students;
+  }
   function renderStats() {
-    const present = students.filter((s) => s.present_today).length;
-    $("stat-total").textContent = students.length;
+    const pool = visibleStudents();
+    const present = pool.filter((s) => s.present_today).length;
+    $("stat-total").textContent = pool.length;
     $("stat-present").textContent = present;
-    $("stat-absent").textContent = students.length - present;
-    $("present-count").textContent = `${present} / ${students.length}`;
+    $("stat-absent").textContent = pool.length - present;
+    $("present-count").textContent = `${present} / ${pool.length}`;
   }
 
   function renderStudents() {
     const q = $("search").value.trim().toLowerCase();
     const list = $("student-list");
-    const rows = students.filter((s) =>
-      !q || s.name.toLowerCase().includes(q) || s.student_no.toLowerCase().includes(q) || (s.grade || "").toLowerCase().includes(q)
+    const rows = visibleStudents().filter((s) =>
+      !q || s.name.toLowerCase().includes(q) || s.student_no.toLowerCase().includes(q) || (s.grade || "").toLowerCase().includes(q) || (s.bus_no || "").toLowerCase().includes(q)
     );
     list.innerHTML = rows.map((s) => `
       <li data-id="${s.id}">
         ${avatarHtml(s)}
         <div class="info">
           <div class="name">${escapeHtml(s.name)}</div>
-          <div class="sub">${escapeHtml(s.student_no)}${s.grade ? " · " + escapeHtml(s.grade) : ""} · ${s.total_days} day${s.total_days === 1 ? "" : "s"}</div>
+          <div class="sub">${busTag(s)}${escapeHtml(s.student_no)}${s.grade ? " · " + escapeHtml(s.grade) : ""} · ${s.total_days} day${s.total_days === 1 ? "" : "s"}</div>
         </div>
         ${s.present_today
           ? `<span class="badge present">✓ ${escapeHtml((s.time_today || "").slice(0, 5))}</span>`
@@ -167,18 +200,20 @@
   async function loadPresent() {
     const data = await api(`/api/attendance?date=${todayStr()}`);
     const list = $("present-list");
-    list.innerHTML = data.records.map((r) => `
+    const records = busFilter ? data.records.filter((r) => r.bus_no === busFilter) : data.records;
+    list.innerHTML = records.map((r) => `
       <li data-record="${r.id}">
         ${avatarHtml(r)}
         <div class="info">
           <div class="name">${escapeHtml(r.name)}</div>
-          <div class="sub">${escapeHtml(r.student_no)}${r.grade ? " · " + escapeHtml(r.grade) : ""} · ${r.method}</div>
+          <div class="sub">${busTag(r)}${escapeHtml(r.student_no)}${r.grade ? " · " + escapeHtml(r.grade) : ""} · ${r.method}</div>
         </div>
         <span class="badge present">${escapeHtml(r.time.slice(0, 5))}</span>
         <button class="undo" data-undo="${r.id}" title="Remove">Undo</button>
       </li>`).join("");
-    $("present-empty").classList.toggle("hidden", data.records.length > 0);
-    $("present-count").textContent = `${data.records.length} / ${data.total_students}`;
+    $("present-empty").classList.toggle("hidden", records.length > 0);
+    const total = busFilter ? students.filter((s) => s.bus_no === busFilter).length : data.total_students;
+    $("present-count").textContent = `${records.length} / ${total}`;
   }
 
   async function markPresent(student, method) {
@@ -243,7 +278,7 @@
           if (best.label !== "unknown") {
             student = students.find((s) => String(s.id) === best.label);
             if (student) {
-              label = `${student.name} (${Math.round((1 - best.distance) * 100)}%)`;
+              label = `${student.name}${student.bus_no ? " · Bus " + student.bus_no : ""} (${Math.round((1 - best.distance) * 100)}%)`;
               color = student.present_today ? "#2ecc71" : "#f1c40f";
             }
           }
@@ -275,7 +310,9 @@
 
   // ----------------------------------------------------------- add student
   function resetAddForm() {
+    const lastBus = $("add-bus").value;
     $("form-add").reset();
+    $("add-bus").value = busFilter || lastBus;  // keep the bus when registering a whole bus in a row
     addSamples = []; addPhoto = ""; lastAddDetection = null;
     $("add-preview").classList.add("hidden");
     $("add-preview").src = "";
@@ -383,6 +420,7 @@
         name: $("add-name").value.trim(),
         student_no: $("add-no").value.trim(),
         grade: $("add-grade").value.trim(),
+        bus_no: $("add-bus").value.trim(),
         photo: addPhoto,
         descriptors: addSamples.map((d) => Array.from(d)),
       };
@@ -408,7 +446,7 @@
     detailStudent = s;
     $("detail-photo").outerHTML = avatarHtml(s, true).replace(/^<(\w+)/, '<$1 id="detail-photo"');
     $("detail-name").textContent = s.name;
-    $("detail-meta").textContent = `${s.student_no}${s.grade ? " · " + s.grade : ""}${s.descriptors && s.descriptors.length ? ` · ${s.descriptors.length} face sample${s.descriptors.length > 1 ? "s" : ""}` : " · no face registered"}`;
+    $("detail-meta").textContent = `${s.student_no}${s.grade ? " · " + s.grade : ""}${s.bus_no ? " · Bus " + s.bus_no : ""}${s.descriptors && s.descriptors.length ? ` · ${s.descriptors.length} face sample${s.descriptors.length > 1 ? "s" : ""}` : " · no face registered"}`;
     $("detail-status").textContent = s.present_today ? `Present today at ${(s.time_today || "").slice(0, 5)}` : "Not marked today";
     $("btn-detail-mark").disabled = !!s.present_today;
     $("detail-history").innerHTML = "<li>Loading…</li>";
@@ -434,8 +472,9 @@
   function updateExportLinks() {
     const from = $("export-from").value || monthStart();
     const to = $("export-to").value || todayStr();
-    $("btn-excel").href = `/api/export/excel?from=${from}&to=${to}`;
-    $("btn-pdf").href = `/api/export/pdf?from=${from}&to=${to}`;
+    const bus = encodeURIComponent($("export-bus").value || "");
+    $("btn-excel").href = `/api/export/excel?from=${from}&to=${to}&bus=${bus}`;
+    $("btn-pdf").href = `/api/export/pdf?from=${from}&to=${to}&bus=${bus}`;
   }
 
   // ---------------------------------------------------------------- wiring
@@ -461,7 +500,16 @@
     $("export-to").value = todayStr();
     $("export-from").addEventListener("change", updateExportLinks);
     $("export-to").addEventListener("change", updateExportLinks);
+    $("export-bus").addEventListener("change", updateExportLinks);
     updateExportLinks();
+
+    // Bus filter chips (both tabs share the same filter)
+    ["bus-chips", "scan-bus-chips"].forEach((id) =>
+      $(id).addEventListener("click", (e) => {
+        const chip = e.target.closest("[data-bus]");
+        if (chip) setBusFilter(chip.dataset.bus);
+      })
+    );
 
     // Add student modal
     $("btn-add-cam").addEventListener("click", async () => {
@@ -511,11 +559,11 @@
       const q = $("manual-search").value.trim().toLowerCase();
       const box = $("manual-results");
       if (!q) { box.innerHTML = ""; return; }
-      const rows = students.filter((s) => !s.present_today && (s.name.toLowerCase().includes(q) || s.student_no.toLowerCase().includes(q))).slice(0, 6);
+      const rows = visibleStudents().filter((s) => !s.present_today && (s.name.toLowerCase().includes(q) || s.student_no.toLowerCase().includes(q))).slice(0, 6);
       box.innerHTML = rows.map((s) => `
         <li data-manual="${s.id}">
           ${avatarHtml(s)}
-          <div class="info"><div class="name">${escapeHtml(s.name)}</div><div class="sub">${escapeHtml(s.student_no)}${s.grade ? " · " + escapeHtml(s.grade) : ""}</div></div>
+          <div class="info"><div class="name">${escapeHtml(s.name)}</div><div class="sub">${busTag(s)}${escapeHtml(s.student_no)}${s.grade ? " · " + escapeHtml(s.grade) : ""}</div></div>
           <span class="badge present">Mark ✓</span>
         </li>`).join("") || `<li><div class="info sub">No unmarked student matches</div></li>`;
     });

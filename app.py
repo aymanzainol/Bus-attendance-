@@ -50,6 +50,7 @@ def init_db():
             student_no  TEXT NOT NULL UNIQUE,
             name        TEXT NOT NULL,
             grade       TEXT NOT NULL DEFAULT '',
+            bus_no      TEXT NOT NULL DEFAULT '',
             photo       TEXT NOT NULL DEFAULT '',
             descriptors TEXT NOT NULL DEFAULT '[]',
             created_at  TEXT NOT NULL
@@ -65,6 +66,10 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_attendance_day ON attendance(day);
         """
     )
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(students)")}
+    if "bus_no" not in cols:
+        conn.execute("ALTER TABLE students ADD COLUMN bus_no TEXT NOT NULL DEFAULT ''")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_students_bus ON students(bus_no)")
     conn.commit()
     conn.close()
 
@@ -95,6 +100,7 @@ def student_row_to_dict(row, include_descriptors=True):
         "student_no": row["student_no"],
         "name": row["name"],
         "grade": row["grade"],
+        "bus_no": row["bus_no"],
         "photo": row["photo"],
         "created_at": row["created_at"],
     }
@@ -167,12 +173,22 @@ def list_students():
     return jsonify({"date": day, "students": students})
 
 
+@app.route("/api/buses", methods=["GET"])
+def list_buses():
+    db = get_db()
+    rows = db.execute(
+        "SELECT bus_no, COUNT(*) AS n FROM students WHERE bus_no <> '' GROUP BY bus_no ORDER BY bus_no COLLATE NOCASE"
+    ).fetchall()
+    return jsonify({"buses": [{"bus_no": r["bus_no"], "students": r["n"]} for r in rows]})
+
+
 @app.route("/api/students", methods=["POST"])
 def create_student():
     payload = request.get_json(silent=True) or {}
     name = (payload.get("name") or "").strip()
     student_no = (payload.get("student_no") or "").strip()
     grade = (payload.get("grade") or "").strip()
+    bus_no = (payload.get("bus_no") or "").strip()
     photo = payload.get("photo") or ""
     if not name:
         return jsonify({"error": "Name is required"}), 400
@@ -190,9 +206,9 @@ def create_student():
     db = get_db()
     try:
         cur = db.execute(
-            "INSERT INTO students (student_no, name, grade, photo, descriptors, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (student_no, name, grade, photo, descriptors, datetime.now().isoformat(timespec="seconds")),
+            "INSERT INTO students (student_no, name, grade, bus_no, photo, descriptors, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (student_no, name, grade, bus_no, photo, descriptors, datetime.now().isoformat(timespec="seconds")),
         )
         db.commit()
     except sqlite3.IntegrityError:
@@ -214,6 +230,7 @@ def update_student(student_id):
     name = (payload.get("name") or row["name"]).strip()
     student_no = (payload.get("student_no") or row["student_no"]).strip()
     grade = (payload.get("grade") if payload.get("grade") is not None else row["grade"]).strip()
+    bus_no = (payload.get("bus_no") if payload.get("bus_no") is not None else row["bus_no"]).strip()
     photo = payload.get("photo") if payload.get("photo") is not None else row["photo"]
     if photo and not photo.startswith("data:image/"):
         return jsonify({"error": "Photo must be an image"}), 400
@@ -225,8 +242,8 @@ def update_student(student_id):
             return jsonify({"error": str(exc)}), 400
     try:
         db.execute(
-            "UPDATE students SET student_no=?, name=?, grade=?, photo=?, descriptors=? WHERE id=?",
-            (student_no, name, grade, photo, descriptors, student_id),
+            "UPDATE students SET student_no=?, name=?, grade=?, bus_no=?, photo=?, descriptors=? WHERE id=?",
+            (student_no, name, grade, bus_no, photo, descriptors, student_id),
         )
         db.commit()
     except sqlite3.IntegrityError:
@@ -270,7 +287,7 @@ def list_attendance():
     if day is None:
         return jsonify({"error": "Invalid date"}), 400
     rows = db.execute(
-        "SELECT a.id, a.day, a.time, a.method, s.id AS student_id, s.student_no, s.name, s.grade, s.photo "
+        "SELECT a.id, a.day, a.time, a.method, s.id AS student_id, s.student_no, s.name, s.grade, s.bus_no, s.photo "
         "FROM attendance a JOIN students s ON s.id = a.student_id "
         "WHERE a.day = ? ORDER BY a.time DESC",
         (day,),
@@ -344,17 +361,28 @@ def delete_attendance(record_id):
 
 
 # ---------------------------------------------------------------------- export
-def build_report(start, end):
-    """Collect everything the exporters need for the given inclusive date range."""
+def build_report(start, end, bus_no=""):
+    """Collect everything the exporters need for the given inclusive date range (optionally one bus)."""
     db = get_db()
-    students = db.execute(
-        "SELECT id, student_no, name, grade FROM students ORDER BY name COLLATE NOCASE"
-    ).fetchall()
-    records = db.execute(
-        "SELECT a.student_id, a.day, a.time, a.method FROM attendance a "
-        "WHERE a.day BETWEEN ? AND ? ORDER BY a.day, a.time",
-        (start, end),
-    ).fetchall()
+    if bus_no:
+        students = db.execute(
+            "SELECT id, student_no, name, grade, bus_no FROM students WHERE bus_no = ? ORDER BY name COLLATE NOCASE",
+            (bus_no,),
+        ).fetchall()
+        records = db.execute(
+            "SELECT a.student_id, a.day, a.time, a.method FROM attendance a JOIN students s ON s.id = a.student_id "
+            "WHERE s.bus_no = ? AND a.day BETWEEN ? AND ? ORDER BY a.day, a.time",
+            (bus_no, start, end),
+        ).fetchall()
+    else:
+        students = db.execute(
+            "SELECT id, student_no, name, grade, bus_no FROM students ORDER BY name COLLATE NOCASE"
+        ).fetchall()
+        records = db.execute(
+            "SELECT a.student_id, a.day, a.time, a.method FROM attendance a "
+            "WHERE a.day BETWEEN ? AND ? ORDER BY a.day, a.time",
+            (start, end),
+        ).fetchall()
     days = sorted({r["day"] for r in records})
     by_student = {}
     for r in records:
@@ -362,6 +390,7 @@ def build_report(start, end):
     return {
         "start": start,
         "end": end,
+        "bus_no": bus_no,
         "students": [dict(s) for s in students],
         "records": [dict(r) for r in records],
         "days": days,
@@ -371,7 +400,12 @@ def build_report(start, end):
 
 
 def export_filename(report, ext):
-    return f"bus-attendance_{report['start']}_to_{report['end']}.{ext}"
+    bus = f"_bus-{re.sub(r'[^A-Za-z0-9-]+', '', report['bus_no'])}" if report["bus_no"] else ""
+    return f"bus-attendance{bus}_{report['start']}_to_{report['end']}.{ext}"
+
+
+def bus_from_args():
+    return (request.args.get("bus") or "").strip()[:40]
 
 
 @app.route("/api/export/excel")
@@ -383,9 +417,10 @@ def export_excel():
     start, end = range_from_args()
     if start is None:
         return jsonify({"error": "Invalid date range"}), 400
-    report = build_report(start, end)
+    report = build_report(start, end, bus_from_args())
     days = report["days"]
     n_days = len(days)
+    bus_title = f"  Bus {report['bus_no']}" if report["bus_no"] else ""
 
     wb = Workbook()
     head_font = Font(bold=True, color="FFFFFF")
@@ -403,50 +438,51 @@ def export_excel():
     # Sheet 1: Summary
     ws = wb.active
     ws.title = "Summary"
-    ws.append([f"Bus Attendance Summary  ({start} to {end})"])
+    ws.append([f"Bus Attendance Summary{bus_title}  ({start} to {end})"])
     ws["A1"].font = Font(bold=True, size=14)
     ws.append([f"School days with records: {n_days}    Students: {len(report['students'])}    Generated: {report['generated']}"])
     ws.append([])
-    ws.append(["No", "Student ID", "Name", "Class", "Days Present", "Days Absent", "Attendance %"])
+    ws.append(["No", "Student ID", "Name", "Class", "Bus", "Days Present", "Days Absent", "Attendance %"])
     style_header(ws, 4)
     for i, s in enumerate(report["students"], 1):
         present = len(report["by_student"].get(s["id"], {}))
         pct = round(100 * present / n_days, 1) if n_days else 0
-        ws.append([i, s["student_no"], s["name"], s["grade"], present, n_days - present, pct])
-    for col, width in zip("ABCDEFG", (6, 14, 30, 12, 14, 14, 14)):
+        ws.append([i, s["student_no"], s["name"], s["grade"], s["bus_no"], present, n_days - present, pct])
+    for col, width in zip("ABCDEFGH", (6, 14, 30, 12, 10, 14, 14, 14)):
         ws.column_dimensions[col].width = width
     ws.freeze_panes = "A5"
 
     # Sheet 2: Daily matrix
     ws2 = wb.create_sheet("Daily")
-    header = ["Student ID", "Name", "Class"] + days + ["Total"]
+    header = ["Student ID", "Name", "Class", "Bus"] + days + ["Total"]
     ws2.append(header)
     style_header(ws2)
     for s in report["students"]:
         marks = report["by_student"].get(s["id"], {})
-        row = [s["student_no"], s["name"], s["grade"]] + ["P" if d in marks else "A" for d in days] + [len(marks)]
+        row = [s["student_no"], s["name"], s["grade"], s["bus_no"]] + ["P" if d in marks else "A" for d in days] + [len(marks)]
         ws2.append(row)
         r = ws2.max_row
-        for j, d in enumerate(days, start=4):
+        for j, d in enumerate(days, start=5):
             cell = ws2.cell(row=r, column=j)
             cell.alignment = center
             cell.fill = present_fill if d in marks else absent_fill
     ws2.column_dimensions["A"].width = 14
     ws2.column_dimensions["B"].width = 30
     ws2.column_dimensions["C"].width = 12
-    for j in range(4, 4 + n_days):
+    ws2.column_dimensions["D"].width = 10
+    for j in range(5, 5 + n_days):
         ws2.column_dimensions[get_column_letter(j)].width = 11
-    ws2.freeze_panes = "D2"
+    ws2.freeze_panes = "E2"
 
     # Sheet 3: Log
     ws3 = wb.create_sheet("Log")
-    ws3.append(["Date", "Time", "Student ID", "Name", "Class", "Method"])
+    ws3.append(["Date", "Time", "Student ID", "Name", "Class", "Bus", "Method"])
     style_header(ws3)
     lookup = {s["id"]: s for s in report["students"]}
     for r in report["records"]:
         s = lookup.get(r["student_id"], {})
-        ws3.append([r["day"], r["time"], s.get("student_no", ""), s.get("name", ""), s.get("grade", ""), r["method"]])
-    for col, width in zip("ABCDEF", (12, 10, 14, 30, 12, 10)):
+        ws3.append([r["day"], r["time"], s.get("student_no", ""), s.get("name", ""), s.get("grade", ""), s.get("bus_no", ""), r["method"]])
+    for col, width in zip("ABCDEFG", (12, 10, 14, 30, 12, 10, 10)):
         ws3.column_dimensions[col].width = width
     ws3.freeze_panes = "A2"
 
@@ -472,9 +508,10 @@ def export_pdf():
     start, end = range_from_args()
     if start is None:
         return jsonify({"error": "Invalid date range"}), 400
-    report = build_report(start, end)
+    report = build_report(start, end, bus_from_args())
     days = report["days"]
     n_days = len(days)
+    bus_title = f" – Bus {report['bus_no']}" if report["bus_no"] else ""
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -488,7 +525,7 @@ def export_pdf():
     )
     styles = getSampleStyleSheet()
     story = [
-        Paragraph("Bus Attendance Report", styles["Title"]),
+        Paragraph(f"Bus Attendance Report{bus_title}", styles["Title"]),
         Paragraph(
             f"Period: <b>{start}</b> to <b>{end}</b> &nbsp;&nbsp; School days with records: <b>{n_days}</b> "
             f"&nbsp;&nbsp; Students: <b>{len(report['students'])}</b> &nbsp;&nbsp; Generated: {report['generated']}",
@@ -509,12 +546,12 @@ def export_pdf():
     )
 
     # Summary table
-    data = [["No", "Student ID", "Name", "Class", "Present", "Absent", "%"]]
+    data = [["No", "Student ID", "Name", "Class", "Bus", "Present", "Absent", "%"]]
     for i, s in enumerate(report["students"], 1):
         present = len(report["by_student"].get(s["id"], {}))
         pct = f"{100 * present / n_days:.0f}%" if n_days else "-"
-        data.append([i, s["student_no"], s["name"], s["grade"], present, n_days - present, pct])
-    table = Table(data, repeatRows=1, colWidths=[12 * mm, 30 * mm, 90 * mm, 30 * mm, 22 * mm, 22 * mm, 18 * mm])
+        data.append([i, s["student_no"], s["name"], s["grade"], s["bus_no"], present, n_days - present, pct])
+    table = Table(data, repeatRows=1, colWidths=[12 * mm, 30 * mm, 80 * mm, 26 * mm, 22 * mm, 22 * mm, 22 * mm, 18 * mm])
     table.setStyle(header_style)
     table.setStyle(TableStyle([("FONTSIZE", (0, 0), (-1, -1), 8), ("ALIGN", (4, 1), (-1, -1), "CENTER")]))
     story.append(Paragraph("Summary (the full scan log is included in the Excel export)", styles["Heading2"]))
@@ -525,20 +562,20 @@ def export_pdf():
         story.append(PageBreak())
         story.append(Paragraph("Daily attendance (P = present, blank = absent)", styles["Heading2"]))
         day_labels = [d[5:] for d in days]  # MM-DD
-        mdata = [["Student ID", "Name"] + day_labels + ["Tot"]]
+        mdata = [["Student ID", "Name", "Bus"] + day_labels + ["Tot"]]
         for s in report["students"]:
             marks = report["by_student"].get(s["id"], {})
-            mdata.append([s["student_no"], s["name"]] + ["P" if d in marks else "" for d in days] + [len(marks)])
-        avail = landscape(A4)[0] - 24 * mm - 25 * mm - 60 * mm - 10 * mm
+            mdata.append([s["student_no"], s["name"], s["bus_no"]] + ["P" if d in marks else "" for d in days] + [len(marks)])
+        avail = landscape(A4)[0] - 24 * mm - 25 * mm - 55 * mm - 14 * mm - 10 * mm
         day_w = min(12 * mm, avail / n_days)
-        mtable = Table(mdata, repeatRows=1, colWidths=[25 * mm, 60 * mm] + [day_w] * n_days + [10 * mm])
+        mtable = Table(mdata, repeatRows=1, colWidths=[25 * mm, 55 * mm, 14 * mm] + [day_w] * n_days + [10 * mm])
         mtable.setStyle(header_style)
         mtable.setStyle(
             TableStyle(
                 [
                     ("FONTSIZE", (0, 0), (-1, -1), 6),
                     ("ALIGN", (2, 0), (-1, -1), "CENTER"),
-                    ("TEXTCOLOR", (2, 1), (-2, -1), colors.HexColor("#0B6623")),
+                    ("TEXTCOLOR", (3, 1), (-2, -1), colors.HexColor("#0B6623")),
                 ]
             )
         )

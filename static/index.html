@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
-  <meta name="theme-color" content="#1f4e78">
+  <meta name="theme-color" content="#050608">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <title>Bus Attendance</title>
@@ -12,7 +12,7 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">🚌 Bus Attendance</div>
+    <div class="brand">🚌 Bus <b>Attendance</b></div>
     <div id="model-status" class="model-status">Loading face models…</div>
   </header>
 
@@ -20,8 +20,8 @@
   <main id="tab-students" class="tab active">
     <section class="stats">
       <div class="stat"><div class="stat-num" id="stat-total">0</div><div class="stat-label">Students</div></div>
-      <div class="stat"><div class="stat-num" id="stat-present">0</div><div class="stat-label">Present today</div></div>
-      <div class="stat"><div class="stat-num" id="stat-absent">0</div><div class="stat-label">Absent today</div></div>
+      <div class="stat"><div class="stat-num" id="stat-present">0</div><div class="stat-label">Present</div></div>
+      <div class="stat"><div class="stat-num" id="stat-absent">0</div><div class="stat-label">Absent</div></div>
     </section>
 
     <section class="card">
@@ -31,11 +31,15 @@
         <label>To <input type="date" id="export-to"></label>
       </div>
       <div class="row">
+        <label>Bus <select id="export-bus"><option value="">All buses</option></select></label>
+      </div>
+      <div class="row">
         <a class="btn btn-green" id="btn-excel" href="#" download>📊 Excel</a>
         <a class="btn btn-red" id="btn-pdf" href="#" download>📄 PDF</a>
       </div>
     </section>
 
+    <div class="chips" id="bus-chips"></div>
     <section class="list-head">
       <input type="search" id="search" placeholder="Search name, ID or class…" autocomplete="off">
       <button class="btn btn-primary" id="btn-add">＋ Add</button>
@@ -63,6 +67,7 @@
         <h2>Present today</h2>
         <span class="pill" id="present-count">0 / 0</span>
       </div>
+      <div class="chips" id="scan-bus-chips"></div>
       <div class="row">
         <input type="search" id="manual-search" placeholder="Mark manually: type a name or ID…" autocomplete="off">
       </div>
@@ -85,7 +90,10 @@
       <form id="form-add" autocomplete="off">
         <label>Full name <input type="text" id="add-name" required maxlength="80"></label>
         <label>Student ID <input type="text" id="add-no" required maxlength="40"></label>
-        <label>Class / Grade <input type="text" id="add-grade" maxlength="40" placeholder="e.g. 5A"></label>
+        <div class="row">
+          <label>Class / Grade <input type="text" id="add-grade" maxlength="40" placeholder="e.g. 5A"></label>
+          <label>Bus number <input type="text" id="add-bus" maxlength="40" placeholder="e.g. 3" inputmode="numeric"></label>
+        </div>
 
         <div class="face-box">
           <div class="video-wrap small">
