@@ -47,10 +47,11 @@ def init_db():
         """
         CREATE TABLE IF NOT EXISTS students (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            student_no  TEXT NOT NULL UNIQUE,
+            national_id TEXT NOT NULL UNIQUE,
             name        TEXT NOT NULL,
             grade       TEXT NOT NULL DEFAULT '',
             bus_no      TEXT NOT NULL DEFAULT '',
+            parent_phone TEXT NOT NULL DEFAULT '',
             photo       TEXT NOT NULL DEFAULT '',
             descriptors TEXT NOT NULL DEFAULT '[]',
             created_at  TEXT NOT NULL
@@ -67,8 +68,12 @@ def init_db():
         """
     )
     cols = {r[1] for r in conn.execute("PRAGMA table_info(students)")}
+    if "student_no" in cols and "national_id" not in cols:
+        conn.execute("ALTER TABLE students RENAME COLUMN student_no TO national_id")
     if "bus_no" not in cols:
         conn.execute("ALTER TABLE students ADD COLUMN bus_no TEXT NOT NULL DEFAULT ''")
+    if "parent_phone" not in cols:
+        conn.execute("ALTER TABLE students ADD COLUMN parent_phone TEXT NOT NULL DEFAULT ''")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_students_bus ON students(bus_no)")
     conn.commit()
     conn.close()
@@ -97,10 +102,11 @@ def valid_day(value, default=None):
 def student_row_to_dict(row, include_descriptors=True):
     data = {
         "id": row["id"],
-        "student_no": row["student_no"],
+        "national_id": row["national_id"],
         "name": row["name"],
         "grade": row["grade"],
         "bus_no": row["bus_no"],
+        "parent_phone": row["parent_phone"],
         "photo": row["photo"],
         "created_at": row["created_at"],
     }
@@ -186,14 +192,15 @@ def list_buses():
 def create_student():
     payload = request.get_json(silent=True) or {}
     name = (payload.get("name") or "").strip()
-    student_no = (payload.get("student_no") or "").strip()
+    national_id = (payload.get("national_id") or "").strip()
     grade = (payload.get("grade") or "").strip()
     bus_no = (payload.get("bus_no") or "").strip()
+    parent_phone = (payload.get("parent_phone") or "").strip()
     photo = payload.get("photo") or ""
     if not name:
         return jsonify({"error": "Name is required"}), 400
-    if not student_no:
-        return jsonify({"error": "Student ID is required"}), 400
+    if not national_id:
+        return jsonify({"error": "National ID is required"}), 400
     if photo and not photo.startswith("data:image/"):
         return jsonify({"error": "Photo must be an image"}), 400
     if len(photo) > 400_000:
@@ -206,13 +213,13 @@ def create_student():
     db = get_db()
     try:
         cur = db.execute(
-            "INSERT INTO students (student_no, name, grade, bus_no, photo, descriptors, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (student_no, name, grade, bus_no, photo, descriptors, datetime.now().isoformat(timespec="seconds")),
+            "INSERT INTO students (national_id, name, grade, bus_no, parent_phone, photo, descriptors, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (national_id, name, grade, bus_no, parent_phone, photo, descriptors, datetime.now().isoformat(timespec="seconds")),
         )
         db.commit()
     except sqlite3.IntegrityError:
-        return jsonify({"error": f"Student ID '{student_no}' already exists"}), 409
+        return jsonify({"error": f"National ID '{national_id}' already exists"}), 409
     row = db.execute("SELECT * FROM students WHERE id = ?", (cur.lastrowid,)).fetchone()
     s = student_row_to_dict(row)
     s.update({"present_today": False, "time_today": None, "total_days": 0})
@@ -228,9 +235,10 @@ def update_student(student_id):
         return jsonify({"error": "Student not found"}), 404
 
     name = (payload.get("name") or row["name"]).strip()
-    student_no = (payload.get("student_no") or row["student_no"]).strip()
+    national_id = (payload.get("national_id") or row["national_id"]).strip()
     grade = (payload.get("grade") if payload.get("grade") is not None else row["grade"]).strip()
     bus_no = (payload.get("bus_no") if payload.get("bus_no") is not None else row["bus_no"]).strip()
+    parent_phone = (payload.get("parent_phone") if payload.get("parent_phone") is not None else row["parent_phone"]).strip()
     photo = payload.get("photo") if payload.get("photo") is not None else row["photo"]
     if photo and not photo.startswith("data:image/"):
         return jsonify({"error": "Photo must be an image"}), 400
@@ -242,12 +250,12 @@ def update_student(student_id):
             return jsonify({"error": str(exc)}), 400
     try:
         db.execute(
-            "UPDATE students SET student_no=?, name=?, grade=?, bus_no=?, photo=?, descriptors=? WHERE id=?",
-            (student_no, name, grade, bus_no, photo, descriptors, student_id),
+            "UPDATE students SET national_id=?, name=?, grade=?, bus_no=?, parent_phone=?, photo=?, descriptors=? WHERE id=?",
+            (national_id, name, grade, bus_no, parent_phone, photo, descriptors, student_id),
         )
         db.commit()
     except sqlite3.IntegrityError:
-        return jsonify({"error": f"Student ID '{student_no}' already exists"}), 409
+        return jsonify({"error": f"National ID '{national_id}' already exists"}), 409
     row = db.execute("SELECT * FROM students WHERE id = ?", (student_id,)).fetchone()
     return jsonify(student_row_to_dict(row))
 
@@ -287,7 +295,7 @@ def list_attendance():
     if day is None:
         return jsonify({"error": "Invalid date"}), 400
     rows = db.execute(
-        "SELECT a.id, a.day, a.time, a.method, s.id AS student_id, s.student_no, s.name, s.grade, s.bus_no, s.photo "
+        "SELECT a.id, a.day, a.time, a.method, s.id AS student_id, s.national_id, s.name, s.grade, s.bus_no, s.parent_phone, s.photo "
         "FROM attendance a JOIN students s ON s.id = a.student_id "
         "WHERE a.day = ? ORDER BY a.time DESC",
         (day,),
@@ -324,7 +332,7 @@ def mark_attendance():
                 "id": existing["id"],
                 "student_id": student_id,
                 "name": student["name"],
-                "student_no": student["student_no"],
+                "national_id": student["national_id"],
                 "day": day,
                 "time": existing["time"],
             }
@@ -341,7 +349,7 @@ def mark_attendance():
                 "id": cur.lastrowid,
                 "student_id": student_id,
                 "name": student["name"],
-                "student_no": student["student_no"],
+                "national_id": student["national_id"],
                 "day": day,
                 "time": time_str,
             }
@@ -366,7 +374,7 @@ def build_report(start, end, bus_no=""):
     db = get_db()
     if bus_no:
         students = db.execute(
-            "SELECT id, student_no, name, grade, bus_no FROM students WHERE bus_no = ? ORDER BY name COLLATE NOCASE",
+            "SELECT id, national_id, name, grade, bus_no, parent_phone FROM students WHERE bus_no = ? ORDER BY name COLLATE NOCASE",
             (bus_no,),
         ).fetchall()
         records = db.execute(
@@ -376,7 +384,7 @@ def build_report(start, end, bus_no=""):
         ).fetchall()
     else:
         students = db.execute(
-            "SELECT id, student_no, name, grade, bus_no FROM students ORDER BY name COLLATE NOCASE"
+            "SELECT id, national_id, name, grade, bus_no, parent_phone FROM students ORDER BY name COLLATE NOCASE"
         ).fetchall()
         records = db.execute(
             "SELECT a.student_id, a.day, a.time, a.method FROM attendance a "
@@ -442,31 +450,31 @@ def export_excel():
     ws["A1"].font = Font(bold=True, size=14)
     ws.append([f"School days with records: {n_days}    Students: {len(report['students'])}    Generated: {report['generated']}"])
     ws.append([])
-    ws.append(["No", "Student ID", "Name", "Class", "Bus", "Days Present", "Days Absent", "Attendance %"])
+    ws.append(["No", "National ID", "Name", "Class", "Bus", "Parent Phone", "Days Present", "Days Absent", "Attendance %"])
     style_header(ws, 4)
     for i, s in enumerate(report["students"], 1):
         present = len(report["by_student"].get(s["id"], {}))
         pct = round(100 * present / n_days, 1) if n_days else 0
-        ws.append([i, s["student_no"], s["name"], s["grade"], s["bus_no"], present, n_days - present, pct])
-    for col, width in zip("ABCDEFGH", (6, 14, 30, 12, 10, 14, 14, 14)):
+        ws.append([i, s["national_id"], s["name"], s["grade"], s["bus_no"], s["parent_phone"], present, n_days - present, pct])
+    for col, width in zip("ABCDEFGHI", (6, 18, 30, 12, 10, 18, 14, 14, 14)):
         ws.column_dimensions[col].width = width
     ws.freeze_panes = "A5"
 
     # Sheet 2: Daily matrix
     ws2 = wb.create_sheet("Daily")
-    header = ["Student ID", "Name", "Class", "Bus"] + days + ["Total"]
+    header = ["National ID", "Name", "Class", "Bus"] + days + ["Total"]
     ws2.append(header)
     style_header(ws2)
     for s in report["students"]:
         marks = report["by_student"].get(s["id"], {})
-        row = [s["student_no"], s["name"], s["grade"], s["bus_no"]] + ["P" if d in marks else "A" for d in days] + [len(marks)]
+        row = [s["national_id"], s["name"], s["grade"], s["bus_no"]] + ["P" if d in marks else "A" for d in days] + [len(marks)]
         ws2.append(row)
         r = ws2.max_row
         for j, d in enumerate(days, start=5):
             cell = ws2.cell(row=r, column=j)
             cell.alignment = center
             cell.fill = present_fill if d in marks else absent_fill
-    ws2.column_dimensions["A"].width = 14
+    ws2.column_dimensions["A"].width = 18
     ws2.column_dimensions["B"].width = 30
     ws2.column_dimensions["C"].width = 12
     ws2.column_dimensions["D"].width = 10
@@ -476,13 +484,13 @@ def export_excel():
 
     # Sheet 3: Log
     ws3 = wb.create_sheet("Log")
-    ws3.append(["Date", "Time", "Student ID", "Name", "Class", "Bus", "Method"])
+    ws3.append(["Date", "Time", "National ID", "Name", "Class", "Bus", "Method"])
     style_header(ws3)
     lookup = {s["id"]: s for s in report["students"]}
     for r in report["records"]:
         s = lookup.get(r["student_id"], {})
-        ws3.append([r["day"], r["time"], s.get("student_no", ""), s.get("name", ""), s.get("grade", ""), s.get("bus_no", ""), r["method"]])
-    for col, width in zip("ABCDEFG", (12, 10, 14, 30, 12, 10, 10)):
+        ws3.append([r["day"], r["time"], s.get("national_id", ""), s.get("name", ""), s.get("grade", ""), s.get("bus_no", ""), r["method"]])
+    for col, width in zip("ABCDEFG", (12, 10, 18, 30, 12, 10, 10)):
         ws3.column_dimensions[col].width = width
     ws3.freeze_panes = "A2"
 
@@ -546,14 +554,14 @@ def export_pdf():
     )
 
     # Summary table
-    data = [["No", "Student ID", "Name", "Class", "Bus", "Present", "Absent", "%"]]
+    data = [["No", "National ID", "Name", "Class", "Bus", "Parent Phone", "Present", "Absent", "%"]]
     for i, s in enumerate(report["students"], 1):
         present = len(report["by_student"].get(s["id"], {}))
         pct = f"{100 * present / n_days:.0f}%" if n_days else "-"
-        data.append([i, s["student_no"], s["name"], s["grade"], s["bus_no"], present, n_days - present, pct])
-    table = Table(data, repeatRows=1, colWidths=[12 * mm, 30 * mm, 80 * mm, 26 * mm, 22 * mm, 22 * mm, 22 * mm, 18 * mm])
+        data.append([i, s["national_id"], s["name"], s["grade"], s["bus_no"], s["parent_phone"], present, n_days - present, pct])
+    table = Table(data, repeatRows=1, colWidths=[10 * mm, 34 * mm, 70 * mm, 20 * mm, 16 * mm, 34 * mm, 20 * mm, 20 * mm, 16 * mm])
     table.setStyle(header_style)
-    table.setStyle(TableStyle([("FONTSIZE", (0, 0), (-1, -1), 8), ("ALIGN", (4, 1), (-1, -1), "CENTER")]))
+    table.setStyle(TableStyle([("FONTSIZE", (0, 0), (-1, -1), 8), ("ALIGN", (4, 1), (4, -1), "CENTER"), ("ALIGN", (6, 1), (-1, -1), "CENTER")]))
     story.append(Paragraph("Summary (the full scan log is included in the Excel export)", styles["Heading2"]))
     story.append(table)
 
@@ -562,13 +570,13 @@ def export_pdf():
         story.append(PageBreak())
         story.append(Paragraph("Daily attendance (P = present, blank = absent)", styles["Heading2"]))
         day_labels = [d[5:] for d in days]  # MM-DD
-        mdata = [["Student ID", "Name", "Bus"] + day_labels + ["Tot"]]
+        mdata = [["National ID", "Name", "Bus"] + day_labels + ["Tot"]]
         for s in report["students"]:
             marks = report["by_student"].get(s["id"], {})
-            mdata.append([s["student_no"], s["name"], s["bus_no"]] + ["P" if d in marks else "" for d in days] + [len(marks)])
-        avail = landscape(A4)[0] - 24 * mm - 25 * mm - 55 * mm - 14 * mm - 10 * mm
+            mdata.append([s["national_id"], s["name"], s["bus_no"]] + ["P" if d in marks else "" for d in days] + [len(marks)])
+        avail = landscape(A4)[0] - 24 * mm - 32 * mm - 50 * mm - 14 * mm - 10 * mm
         day_w = min(12 * mm, avail / n_days)
-        mtable = Table(mdata, repeatRows=1, colWidths=[25 * mm, 55 * mm, 14 * mm] + [day_w] * n_days + [10 * mm])
+        mtable = Table(mdata, repeatRows=1, colWidths=[32 * mm, 50 * mm, 14 * mm] + [day_w] * n_days + [10 * mm])
         mtable.setStyle(header_style)
         mtable.setStyle(
             TableStyle(

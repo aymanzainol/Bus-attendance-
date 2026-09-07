@@ -7,7 +7,7 @@ Two tabs only:
 
 | Tab | What it does |
 | --- | --- |
-| **Students** | Add a student (name, ID, class, bus number) and register their face with the phone camera or an uploaded photo. See who is present/absent today, attendance history per student, filter by bus, and export a date range (all buses or one bus) to Excel / PDF. |
+| **Students** | Add a student (name, national ID, class, bus number, parent phone) and register their face with the phone camera or an uploaded photo. See who is present/absent today, attendance history per student, filter by bus, and export a date range (all buses or one bus) to Excel / PDF. |
 | **Scan** | Live camera. Every recognised face is marked present automatically (once per day). Shows today's present list with undo, plus a manual-mark search for students the camera cannot see. |
 
 ## How it works
@@ -46,7 +46,7 @@ survives redeploys (`DATA_DIR` defaults to `/data` in the image).
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/api/students?date=YYYY-MM-DD` | All students with today's status |
-| POST | `/api/students` | Create student (`name`, `student_no`, `grade`, `bus_no`, `photo`, `descriptors`) |
+| POST | `/api/students` | Create student (`name`, `national_id`, `grade`, `bus_no`, `parent_phone`, `photo`, `descriptors`) |
 | GET | `/api/buses` | Distinct bus numbers with student counts |
 | PUT/DELETE | `/api/students/<id>` | Update / delete |
 | GET | `/api/students/<id>/history` | Attendance history |

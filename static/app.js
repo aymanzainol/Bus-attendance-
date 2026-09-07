@@ -180,14 +180,14 @@
     const q = $("search").value.trim().toLowerCase();
     const list = $("student-list");
     const rows = visibleStudents().filter((s) =>
-      !q || s.name.toLowerCase().includes(q) || s.student_no.toLowerCase().includes(q) || (s.grade || "").toLowerCase().includes(q) || (s.bus_no || "").toLowerCase().includes(q)
+      !q || s.name.toLowerCase().includes(q) || s.national_id.toLowerCase().includes(q) || (s.grade || "").toLowerCase().includes(q) || (s.bus_no || "").toLowerCase().includes(q)
     );
     list.innerHTML = rows.map((s) => `
       <li data-id="${s.id}">
         ${avatarHtml(s)}
         <div class="info">
           <div class="name">${escapeHtml(s.name)}</div>
-          <div class="sub">${busTag(s)}${escapeHtml(s.student_no)}${s.grade ? " · " + escapeHtml(s.grade) : ""} · ${s.total_days} day${s.total_days === 1 ? "" : "s"}</div>
+          <div class="sub">${busTag(s)}${escapeHtml(s.national_id)}${s.grade ? " · " + escapeHtml(s.grade) : ""} · ${s.total_days} day${s.total_days === 1 ? "" : "s"}</div>
         </div>
         ${s.present_today
           ? `<span class="badge present">✓ ${escapeHtml((s.time_today || "").slice(0, 5))}</span>`
@@ -206,7 +206,7 @@
         ${avatarHtml(r)}
         <div class="info">
           <div class="name">${escapeHtml(r.name)}</div>
-          <div class="sub">${busTag(r)}${escapeHtml(r.student_no)}${r.grade ? " · " + escapeHtml(r.grade) : ""} · ${r.method}</div>
+          <div class="sub">${busTag(r)}${escapeHtml(r.national_id)}${r.grade ? " · " + escapeHtml(r.grade) : ""} · ${r.method}</div>
         </div>
         <span class="badge present">${escapeHtml(r.time.slice(0, 5))}</span>
         <button class="undo" data-undo="${r.id}" title="Remove">Undo</button>
@@ -418,9 +418,10 @@
     try {
       const body = {
         name: $("add-name").value.trim(),
-        student_no: $("add-no").value.trim(),
+        national_id: $("add-no").value.trim(),
         grade: $("add-grade").value.trim(),
         bus_no: $("add-bus").value.trim(),
+        parent_phone: $("add-parent").value.trim(),
         photo: addPhoto,
         descriptors: addSamples.map((d) => Array.from(d)),
       };
@@ -446,8 +447,11 @@
     detailStudent = s;
     $("detail-photo").outerHTML = avatarHtml(s, true).replace(/^<(\w+)/, '<$1 id="detail-photo"');
     $("detail-name").textContent = s.name;
-    $("detail-meta").textContent = `${s.student_no}${s.grade ? " · " + s.grade : ""}${s.bus_no ? " · Bus " + s.bus_no : ""}${s.descriptors && s.descriptors.length ? ` · ${s.descriptors.length} face sample${s.descriptors.length > 1 ? "s" : ""}` : " · no face registered"}`;
+    $("detail-meta").textContent = `${s.national_id}${s.grade ? " · " + s.grade : ""}${s.bus_no ? " · Bus " + s.bus_no : ""}${s.descriptors && s.descriptors.length ? ` · ${s.descriptors.length} face sample${s.descriptors.length > 1 ? "s" : ""}` : " · no face registered"}`;
     $("detail-status").textContent = s.present_today ? `Present today at ${(s.time_today || "").slice(0, 5)}` : "Not marked today";
+    $("detail-parent").innerHTML = s.parent_phone
+      ? `Parent: <a class="tel" href="tel:${escapeHtml(s.parent_phone.replace(/[^+\d]/g, ""))}">📞 ${escapeHtml(s.parent_phone)}</a>`
+      : "Parent: no phone number";
     $("btn-detail-mark").disabled = !!s.present_today;
     $("detail-history").innerHTML = "<li>Loading…</li>";
     openModal("modal-detail");
@@ -559,11 +563,11 @@
       const q = $("manual-search").value.trim().toLowerCase();
       const box = $("manual-results");
       if (!q) { box.innerHTML = ""; return; }
-      const rows = visibleStudents().filter((s) => !s.present_today && (s.name.toLowerCase().includes(q) || s.student_no.toLowerCase().includes(q))).slice(0, 6);
+      const rows = visibleStudents().filter((s) => !s.present_today && (s.name.toLowerCase().includes(q) || s.national_id.toLowerCase().includes(q))).slice(0, 6);
       box.innerHTML = rows.map((s) => `
         <li data-manual="${s.id}">
           ${avatarHtml(s)}
-          <div class="info"><div class="name">${escapeHtml(s.name)}</div><div class="sub">${busTag(s)}${escapeHtml(s.student_no)}${s.grade ? " · " + escapeHtml(s.grade) : ""}</div></div>
+          <div class="info"><div class="name">${escapeHtml(s.name)}</div><div class="sub">${busTag(s)}${escapeHtml(s.national_id)}${s.grade ? " · " + escapeHtml(s.grade) : ""}</div></div>
           <span class="badge present">Mark ✓</span>
         </li>`).join("") || `<li><div class="info sub">No unmarked student matches</div></li>`;
     });

@@ -41,7 +41,7 @@
 
     <div class="chips" id="bus-chips"></div>
     <section class="list-head">
-      <input type="search" id="search" placeholder="Search name, ID or class…" autocomplete="off">
+      <input type="search" id="search" placeholder="Search name, national ID, class or bus…" autocomplete="off">
       <button class="btn btn-primary" id="btn-add">＋ Add</button>
     </section>
     <ul id="student-list" class="student-list"></ul>
@@ -69,7 +69,7 @@
       </div>
       <div class="chips" id="scan-bus-chips"></div>
       <div class="row">
-        <input type="search" id="manual-search" placeholder="Mark manually: type a name or ID…" autocomplete="off">
+        <input type="search" id="manual-search" placeholder="Mark manually: type a name or national ID…" autocomplete="off">
       </div>
       <ul id="manual-results" class="manual-results"></ul>
       <ul id="present-list" class="present-list"></ul>
@@ -89,7 +89,8 @@
       <div class="sheet-head"><h2>Add student</h2><button class="close" data-close="modal-add">✕</button></div>
       <form id="form-add" autocomplete="off">
         <label>Full name <input type="text" id="add-name" required maxlength="80"></label>
-        <label>Student ID <input type="text" id="add-no" required maxlength="40"></label>
+        <label>National ID <input type="text" id="add-no" required maxlength="40" inputmode="numeric" placeholder="e.g. 120512-10-1234"></label>
+        <label>Parent phone number <input type="tel" id="add-parent" maxlength="30" placeholder="e.g. 012-3456789"></label>
         <div class="row">
           <label>Class / Grade <input type="text" id="add-grade" maxlength="40" placeholder="e.g. 5A"></label>
           <label>Bus number <input type="text" id="add-bus" maxlength="40" placeholder="e.g. 3" inputmode="numeric"></label>
@@ -126,6 +127,7 @@
           <div id="detail-name" class="detail-name"></div>
           <div id="detail-meta" class="muted"></div>
           <div id="detail-status" class="muted"></div>
+          <div id="detail-parent" class="muted"></div>
         </div>
       </div>
       <div class="row">
