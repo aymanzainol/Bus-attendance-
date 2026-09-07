@@ -23,6 +23,14 @@ Two tabs only:
   [`face_recognition`](https://github.com/ageitgey/face_recognition), but
   without a native dlib build on the server). Models are served from
   `static/models` and cached by the browser.
+* Face detection uses the **SSD MobileNet V1** detector (better with hijabs,
+  caps and glasses); the tiny detector is a fallback while it loads. Register
+  faces with the head covering worn as usual and take 3 samples.
+* The scanner is self-healing: it releases the camera when the tab or app is
+  hidden and resumes by itself, keeps the screen awake while scanning,
+  retries a busy camera, restarts if the camera track ends, and reloads the
+  page if the face engine stops responding. A status line under the video
+  shows the camera state, the detector in use and any error name.
 * The Flask backend (`app.py`) stores students, their face descriptors and
   attendance in SQLite, and produces the exports with **openpyxl** and
   **reportlab**.

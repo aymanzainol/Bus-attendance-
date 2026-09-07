@@ -9,7 +9,15 @@
   const MATCH_THRESHOLD = 0.5;      // euclidean distance; lower = stricter (0.6 is face-api default)
   const SCAN_INTERVAL_MS = 300;     // how often a frame is analysed while scanning
   const RESCAN_COOLDOWN_MS = 8000;  // do not re-post the same student within this window
-  const DETECT_OPTS = () => new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
+  // SSD MobileNet V1 is much better at finding partially covered faces (hijab, caps, glasses) than the
+  // tiny detector; it is used once its weights load, the tiny detector stays as a fallback.
+  const DETECTOR = { kind: "tiny" };
+  const DETECT_OPTS = () =>
+    DETECTOR.kind === "ssd"
+      ? new faceapi.SsdMobilenetv1Options({ minConfidence: 0.4, maxResults: 10 })
+      : new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.3 });
+  const SCAN_ERROR_LIMIT = 8;       // consecutive detection failures before the page reloads itself
+  const SCAN_STUCK_MS = 8000;       // a detection call taking longer than this is considered hung
 
   const $ = (id) => document.getElementById(id);
 
@@ -18,6 +26,8 @@
   let matcher = null;             // faceapi.FaceMatcher built from students
   let modelsReady = false;
   let scanStream = null, scanTimer = null, scanBusy = false, scanFacing = "environment";
+  let scanWanted = false;           // the user pressed Start and has not pressed Stop (survives tab switches / screen lock)
+  let scanBusySince = 0, scanErrors = 0, wakeLock = null;
   let addStream = null, addTimer = null, addBusy = false, addFacing = "user";
   let addSamples = [];            // Float32Array descriptors captured for the new student
   let addPhoto = "";              // data URL thumbnail for the new student
@@ -109,9 +119,33 @@
     await new Promise((resolve) => {
       if (video.readyState >= 2) return resolve();
       video.onloadedmetadata = () => resolve();
+      setTimeout(resolve, 4000); // never hang if the browser does not fire loadedmetadata (seen on some iOS versions)
     });
-    await video.play().catch(() => {});
+    try {
+      await video.play();
+    } catch (e) {
+      console.warn("video.play failed", e);
+      // autoplay blocked (iOS without a user gesture): a tap on the preview starts it
+      video.addEventListener("click", () => video.play().catch(() => {}), { once: true });
+    }
     return stream;
+  }
+  async function requestWakeLock() {
+    try {
+      if ("wakeLock" in navigator && !wakeLock) {
+        wakeLock = await navigator.wakeLock.request("screen");
+        wakeLock.addEventListener("release", () => { wakeLock = null; });
+      }
+    } catch (e) { /* not supported or denied: the screen may dim, scanning resumes when it wakes */ }
+  }
+  function releaseWakeLock() {
+    if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+  }
+  function setScanStatus(text, kind = "") {
+    const el = $("scan-status");
+    if (!el) return;
+    el.textContent = text;
+    el.className = `scan-status ${kind}`;
   }
   function stopStream(stream, video) {
     if (stream) stream.getTracks().forEach((t) => t.stop());
@@ -143,6 +177,10 @@
       st.textContent = t("models_ready");
       st.className = "model-status ok";
       $("btn-add-capture").disabled = !addStream;
+      // the stronger detector is optional: 5.6 MB, cached by the browser after the first visit
+      faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL)
+        .then(() => { DETECTOR.kind = "ssd"; })
+        .catch((e) => console.warn("SSD detector not loaded, using tiny detector", e));
     } catch (e) {
       console.error(e);
       st.textContent = t("models_failed");
@@ -239,32 +277,72 @@
   }
 
   // ---------------------------------------------------------------- scan
-  async function startScan() {
+  async function startScan(userAction = true) {
     if (!modelsReady) return toast(t("models_still_loading"), "warn");
+    if (userAction) scanWanted = true;
+    if (scanStream) return;
     try {
       scanStream = await openCamera($("scan-video"), scanFacing);
     } catch (e) {
       console.error(e);
-      return toast(t("camera_denied"), "err");
+      setScanStatus(t("camera_error", { name: e.name || "Error" }), "err");
+      if (e.name === "NotReadableError" || e.name === "AbortError") {
+        // the camera is still held by the previous session or another app: try once more shortly
+        toast(t("camera_busy_retry"), "warn");
+        setTimeout(() => { if (scanWanted && !scanStream) startScan(false); }, 1500);
+        return;
+      }
+      scanWanted = false;
+      return toast(`${t("camera_denied")} (${e.name || "Error"})`, "err");
     }
+    // a track can end on its own (camera taken by a call/another app, device unplugged): resume automatically
+    scanStream.getVideoTracks().forEach((track) => {
+      track.onended = () => {
+        if (!scanWanted) return;
+        pauseScan();
+        setScanStatus(t("camera_lost"), "warn");
+        setTimeout(() => { if (scanWanted && !scanStream && !document.hidden) startScan(false); }, 1200);
+      };
+    });
+    scanErrors = 0; scanBusy = false;
     $("scan-hint").classList.add("hidden");
     $("btn-scan-toggle").textContent = t("stop_camera");
+    setScanStatus(t("scan_running", { faces: 0, det: DETECTOR.kind.toUpperCase() }), "ok");
+    requestWakeLock();
+    clearInterval(scanTimer);
     scanTimer = setInterval(scanFrame, SCAN_INTERVAL_MS);
   }
-  function stopScan() {
+  // pause = release the camera but remember that scanning should continue (tab switch, screen lock, background)
+  function pauseScan() {
     clearInterval(scanTimer); scanTimer = null;
     stopStream(scanStream, $("scan-video")); scanStream = null;
+    scanBusy = false;
     const c = $("scan-canvas");
     c.getContext("2d").clearRect(0, 0, c.width, c.height);
+    releaseWakeLock();
     $("scan-hint").classList.remove("hidden");
     $("btn-scan-toggle").textContent = t("start_camera");
   }
+  function stopScan() {
+    scanWanted = false;
+    pauseScan();
+    setScanStatus("");
+  }
+  function resumeScanIfWanted() {
+    if (scanWanted && !scanStream && !document.hidden && $("tab-scan").classList.contains("active")) startScan(false);
+  }
   async function scanFrame() {
     const video = $("scan-video");
-    if (scanBusy || !scanStream || video.readyState < 2 || video.videoWidth === 0) return;
-    scanBusy = true;
+    if (!scanStream || video.readyState < 2 || video.videoWidth === 0) return;
+    if (scanBusy) {
+      // watchdog: a detection that never returns (lost WebGL context after backgrounding) must not freeze scanning forever
+      if (Date.now() - scanBusySince > SCAN_STUCK_MS) { scanBusy = false; scanErrors += 1; } else return;
+    }
+    scanBusy = true; scanBusySince = Date.now();
     try {
       const results = await faceapi.detectAllFaces(video, DETECT_OPTS()).withFaceLandmarks(true).withFaceDescriptors();
+      scanErrors = 0;
+      setScanStatus(t("scan_running", { faces: results.length, det: DETECTOR.kind.toUpperCase() }), "ok");
       const canvas = $("scan-canvas");
       const size = { width: video.videoWidth, height: video.videoHeight };
       faceapi.matchDimensions(canvas, size);
@@ -306,6 +384,15 @@
       }
     } catch (e) {
       console.error(e);
+      scanErrors += 1;
+      setScanStatus(t("scan_error", { name: e.name || "Error", n: scanErrors }), "err");
+      if (scanErrors >= SCAN_ERROR_LIMIT) {
+        // the face engine is broken (typically a lost GPU context); a reload is the only reliable fix.
+        // The page reopens on the Scan tab and starts the camera again by itself.
+        try { sessionStorage.setItem("resumeScan", "1"); } catch (err) { /* ignore */ }
+        toast(t("recovering"), "warn");
+        setTimeout(() => location.reload(), 800);
+      }
     } finally {
       scanBusy = false;
     }
@@ -395,7 +482,7 @@
       preview.src = img.src;
       preview.classList.remove("hidden");
       $("add-hint").classList.add("hidden");
-      const det = await faceapi.detectSingleFace(img, new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.4 }))
+      const det = await faceapi.detectSingleFace(img, DETECTOR.kind === "ssd" ? new faceapi.SsdMobilenetv1Options({ minConfidence: 0.3 }) : new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.3 }))
         .withFaceLandmarks(true).withFaceDescriptor();
       if (!det) {
         err.textContent = t("no_face_in_photo");
@@ -529,8 +616,8 @@
       btn.addEventListener("click", () => {
         document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
         document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.id === btn.dataset.tab));
-        if (btn.dataset.tab === "tab-scan") loadPresent();
-        else { stopScan(); loadStudents(); }
+        if (btn.dataset.tab === "tab-scan") { loadPresent(); resumeScanIfWanted(); }
+        else { pauseScan(); loadStudents(); }
       });
     });
 
@@ -587,10 +674,10 @@
     document.querySelectorAll(".modal").forEach((m) => m.addEventListener("click", (e) => { if (e.target === m) closeModal(m.id); }));
 
     // Scan tab
-    $("btn-scan-toggle").addEventListener("click", () => (scanStream ? stopScan() : startScan()));
+    $("btn-scan-toggle").addEventListener("click", () => (scanStream ? stopScan() : startScan(true)));
     $("btn-scan-flip").addEventListener("click", async () => {
       scanFacing = scanFacing === "environment" ? "user" : "environment";
-      if (scanStream) { stopScan(); await startScan(); }
+      if (scanStream) { pauseScan(); await startScan(false); }
     });
     $("present-list").addEventListener("click", async (e) => {
       const btn = e.target.closest("[data-undo]");
@@ -637,11 +724,19 @@
     updateSamplesLabel();
 
     // Stop cameras when the page is hidden (saves battery, releases the camera)
-    document.addEventListener("visibilitychange", () => { if (document.hidden) { stopScan(); stopAddCam(); } });
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) { pauseScan(); stopAddCam(); }
+      else { requestWakeLock(); resumeScanIfWanted(); }
+    });
+    window.addEventListener("pageshow", resumeScanIfWanted);
   }
 
   // ------------------------------------------------------------------ boot
   wire();
   loadStudents().catch((e) => toast(e.message, "err"));
-  loadModels();
+  loadModels().then(() => {
+    let resume = false;
+    try { resume = sessionStorage.getItem("resumeScan") === "1"; sessionStorage.removeItem("resumeScan"); } catch (e) { /* ignore */ }
+    if (resume) { document.querySelector('.tab-btn[data-tab="tab-scan"]').click(); startScan(true); }
+  });
 })();
