@@ -12,6 +12,9 @@ from datetime import date, datetime
 
 from flask import Flask, g, jsonify, request, send_file, send_from_directory
 
+import arabic_reshaper
+from bidi.algorithm import get_display
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(BASE_DIR, "data"))
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -21,6 +24,136 @@ app = Flask(__name__, static_folder="static", static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024  # photos are small thumbnails
 
 DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+FONT_DIR = os.path.join(BASE_DIR, "static", "fonts")
+
+# ---------------------------------------------------------------------- i18n
+STRINGS = {
+    "ar": {
+        "name_required": "الاسم مطلوب",
+        "id_required": "رقم الهوية الوطنية مطلوب",
+        "photo_image": "يجب أن تكون الصورة ملف صورة",
+        "photo_large": "الصورة كبيرة جدًا",
+        "id_exists": "رقم الهوية '{id}' مسجّل مسبقًا",
+        "not_found": "الطالب غير موجود",
+        "record_not_found": "السجل غير موجود",
+        "invalid_date": "تاريخ غير صالح",
+        "invalid_range": "نطاق تاريخ غير صالح",
+        "desc_list": "يجب أن تكون بصمات الوجه قائمة",
+        "desc_len": "كل بصمة وجه يجب أن تحتوي على 128 رقمًا",
+        "student_id_required": "معرّف الطالب مطلوب",
+        "report_title": "تقرير حضور الحافلة",
+        "summary_title": "ملخص حضور الحافلة",
+        "bus": "الحافلة",
+        "period": "الفترة",
+        "school_days": "أيام الدراسة المسجلة",
+        "students": "الطلاب",
+        "generated": "تاريخ الإنشاء",
+        "sheet_summary": "الملخص",
+        "sheet_daily": "اليومي",
+        "sheet_log": "السجل",
+        "summary_heading": "الملخص (سجل المسح الكامل موجود في ملف إكسل)",
+        "daily_heading": "الحضور اليومي (ح = حاضر، فارغ = غائب)",
+        "no": "الرقم",
+        "national_id": "رقم الهوية الوطنية",
+        "name": "الاسم",
+        "grade": "الصف",
+        "parent_phone": "هاتف ولي الأمر",
+        "days_present": "أيام الحضور",
+        "days_absent": "أيام الغياب",
+        "pct": "نسبة الحضور %",
+        "present": "حاضر",
+        "absent": "غائب",
+        "total": "الإجمالي",
+        "date": "التاريخ",
+        "time": "الوقت",
+        "method": "الطريقة",
+        "method_face": "وجه",
+        "method_manual": "يدوي",
+        "mark_present": "ح",
+        "mark_absent": "غ",
+    },
+    "en": {
+        "name_required": "Name is required",
+        "id_required": "National ID is required",
+        "photo_image": "Photo must be an image",
+        "photo_large": "Photo is too large",
+        "id_exists": "National ID '{id}' already exists",
+        "not_found": "Student not found",
+        "record_not_found": "Record not found",
+        "invalid_date": "Invalid date",
+        "invalid_range": "Invalid date range",
+        "desc_list": "descriptors must be a list",
+        "desc_len": "each descriptor must have 128 numbers",
+        "student_id_required": "student_id is required",
+        "report_title": "Bus Attendance Report",
+        "summary_title": "Bus Attendance Summary",
+        "bus": "Bus",
+        "period": "Period",
+        "school_days": "School days with records",
+        "students": "Students",
+        "generated": "Generated",
+        "sheet_summary": "Summary",
+        "sheet_daily": "Daily",
+        "sheet_log": "Log",
+        "summary_heading": "Summary (the full scan log is included in the Excel export)",
+        "daily_heading": "Daily attendance (P = present, blank = absent)",
+        "no": "No",
+        "national_id": "National ID",
+        "name": "Name",
+        "grade": "Class",
+        "parent_phone": "Parent Phone",
+        "days_present": "Days Present",
+        "days_absent": "Days Absent",
+        "pct": "Attendance %",
+        "present": "Present",
+        "absent": "Absent",
+        "total": "Total",
+        "date": "Date",
+        "time": "Time",
+        "method": "Method",
+        "method_face": "face",
+        "method_manual": "manual",
+        "mark_present": "P",
+        "mark_absent": "A",
+    },
+}
+
+
+def current_lang():
+    lang = request.args.get("lang") or request.headers.get("X-Lang") or "ar"
+    return lang if lang in STRINGS else "ar"
+
+
+def msg(key, **kw):
+    return STRINGS[current_lang()][key].format(**kw)
+
+
+_ARABIC_RE = re.compile(r"[\u0600-\u06FF]")
+
+
+def shape(text):
+    """Shape Arabic text for PDF rendering (reportlab does not do bidi/joining itself)."""
+    text = "" if text is None else str(text)
+    if not _ARABIC_RE.search(text):
+        return text
+    return get_display(arabic_reshaper.reshape(text))
+
+
+_pdf_fonts_ready = False
+
+
+def register_pdf_fonts():
+    global _pdf_fonts_ready
+    if _pdf_fonts_ready:
+        return
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.pdfmetrics import registerFontFamily
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    pdfmetrics.registerFont(TTFont("Amiri", os.path.join(FONT_DIR, "Amiri-Regular.ttf")))
+    pdfmetrics.registerFont(TTFont("Amiri-Bold", os.path.join(FONT_DIR, "Amiri-Bold.ttf")))
+    registerFontFamily("Amiri", normal="Amiri", bold="Amiri-Bold", italic="Amiri", boldItalic="Amiri-Bold")
+    _pdf_fonts_ready = True
 
 
 # --------------------------------------------------------------------------- db
@@ -120,11 +253,11 @@ def clean_descriptors(raw):
     if raw is None:
         return "[]"
     if not isinstance(raw, list):
-        raise ValueError("descriptors must be a list")
+        raise ValueError(msg("desc_list"))
     out = []
     for vec in raw:
         if not isinstance(vec, list) or len(vec) != 128:
-            raise ValueError("each descriptor must have 128 numbers")
+            raise ValueError(msg("desc_len"))
         out.append([float(x) for x in vec])
     if len(out) > 10:
         out = out[:10]
@@ -198,13 +331,13 @@ def create_student():
     parent_phone = (payload.get("parent_phone") or "").strip()
     photo = payload.get("photo") or ""
     if not name:
-        return jsonify({"error": "Name is required"}), 400
+        return jsonify({"error": msg("name_required")}), 400
     if not national_id:
-        return jsonify({"error": "National ID is required"}), 400
+        return jsonify({"error": msg("id_required")}), 400
     if photo and not photo.startswith("data:image/"):
-        return jsonify({"error": "Photo must be an image"}), 400
+        return jsonify({"error": msg("photo_image")}), 400
     if len(photo) > 400_000:
-        return jsonify({"error": "Photo is too large"}), 400
+        return jsonify({"error": msg("photo_large")}), 400
     try:
         descriptors = clean_descriptors(payload.get("descriptors"))
     except ValueError as exc:
@@ -219,7 +352,7 @@ def create_student():
         )
         db.commit()
     except sqlite3.IntegrityError:
-        return jsonify({"error": f"National ID '{national_id}' already exists"}), 409
+        return jsonify({"error": msg("id_exists", id=national_id)}), 409
     row = db.execute("SELECT * FROM students WHERE id = ?", (cur.lastrowid,)).fetchone()
     s = student_row_to_dict(row)
     s.update({"present_today": False, "time_today": None, "total_days": 0})
@@ -232,7 +365,7 @@ def update_student(student_id):
     db = get_db()
     row = db.execute("SELECT * FROM students WHERE id = ?", (student_id,)).fetchone()
     if row is None:
-        return jsonify({"error": "Student not found"}), 404
+        return jsonify({"error": msg("not_found")}), 404
 
     name = (payload.get("name") or row["name"]).strip()
     national_id = (payload.get("national_id") or row["national_id"]).strip()
@@ -241,7 +374,7 @@ def update_student(student_id):
     parent_phone = (payload.get("parent_phone") if payload.get("parent_phone") is not None else row["parent_phone"]).strip()
     photo = payload.get("photo") if payload.get("photo") is not None else row["photo"]
     if photo and not photo.startswith("data:image/"):
-        return jsonify({"error": "Photo must be an image"}), 400
+        return jsonify({"error": msg("photo_image")}), 400
     descriptors = row["descriptors"]
     if "descriptors" in payload:
         try:
@@ -255,7 +388,7 @@ def update_student(student_id):
         )
         db.commit()
     except sqlite3.IntegrityError:
-        return jsonify({"error": f"National ID '{national_id}' already exists"}), 409
+        return jsonify({"error": msg("id_exists", id=national_id)}), 409
     row = db.execute("SELECT * FROM students WHERE id = ?", (student_id,)).fetchone()
     return jsonify(student_row_to_dict(row))
 
@@ -266,7 +399,7 @@ def delete_student(student_id):
     cur = db.execute("DELETE FROM students WHERE id = ?", (student_id,))
     db.commit()
     if cur.rowcount == 0:
-        return jsonify({"error": "Student not found"}), 404
+        return jsonify({"error": msg("not_found")}), 404
     return jsonify({"ok": True})
 
 
@@ -275,7 +408,7 @@ def student_history(student_id):
     db = get_db()
     row = db.execute("SELECT * FROM students WHERE id = ?", (student_id,)).fetchone()
     if row is None:
-        return jsonify({"error": "Student not found"}), 404
+        return jsonify({"error": msg("not_found")}), 404
     records = db.execute(
         "SELECT id, day, time, method FROM attendance WHERE student_id = ? ORDER BY day DESC LIMIT 90",
         (student_id,),
@@ -293,7 +426,7 @@ def list_attendance():
     db = get_db()
     day = valid_day(request.args.get("date"), today_str())
     if day is None:
-        return jsonify({"error": "Invalid date"}), 400
+        return jsonify({"error": msg("invalid_date")}), 400
     rows = db.execute(
         "SELECT a.id, a.day, a.time, a.method, s.id AS student_id, s.national_id, s.name, s.grade, s.bus_no, s.parent_phone, s.photo "
         "FROM attendance a JOIN students s ON s.id = a.student_id "
@@ -309,10 +442,10 @@ def mark_attendance():
     payload = request.get_json(silent=True) or {}
     student_id = payload.get("student_id")
     if not isinstance(student_id, int):
-        return jsonify({"error": "student_id is required"}), 400
+        return jsonify({"error": msg("student_id_required")}), 400
     day = valid_day(payload.get("day"), today_str())
     if day is None:
-        return jsonify({"error": "Invalid day"}), 400
+        return jsonify({"error": msg("invalid_date")}), 400
     time_str = payload.get("time") or datetime.now().strftime("%H:%M:%S")
     if not re.match(r"^\d{2}:\d{2}(:\d{2})?$", str(time_str)):
         time_str = datetime.now().strftime("%H:%M:%S")
@@ -321,7 +454,7 @@ def mark_attendance():
     db = get_db()
     student = db.execute("SELECT * FROM students WHERE id = ?", (student_id,)).fetchone()
     if student is None:
-        return jsonify({"error": "Student not found"}), 404
+        return jsonify({"error": msg("not_found")}), 404
     existing = db.execute(
         "SELECT id, time FROM attendance WHERE student_id = ? AND day = ?", (student_id, day)
     ).fetchone()
@@ -364,7 +497,7 @@ def delete_attendance(record_id):
     cur = db.execute("DELETE FROM attendance WHERE id = ?", (record_id,))
     db.commit()
     if cur.rowcount == 0:
-        return jsonify({"error": "Record not found"}), 404
+        return jsonify({"error": msg("record_not_found")}), 404
     return jsonify({"ok": True})
 
 
@@ -399,6 +532,8 @@ def build_report(start, end, bus_no=""):
         "start": start,
         "end": end,
         "bus_no": bus_no,
+        "lang": current_lang(),
+        "T": STRINGS[current_lang()],
         "students": [dict(s) for s in students],
         "records": [dict(r) for r in records],
         "days": days,
@@ -424,11 +559,13 @@ def export_excel():
 
     start, end = range_from_args()
     if start is None:
-        return jsonify({"error": "Invalid date range"}), 400
+        return jsonify({"error": msg("invalid_range")}), 400
     report = build_report(start, end, bus_from_args())
     days = report["days"]
     n_days = len(days)
-    bus_title = f"  Bus {report['bus_no']}" if report["bus_no"] else ""
+    T = report["T"]
+    rtl = report["lang"] == "ar"
+    bus_title = f"  {T['bus']} {report['bus_no']}" if report["bus_no"] else ""
 
     wb = Workbook()
     head_font = Font(bold=True, color="FFFFFF")
@@ -445,12 +582,13 @@ def export_excel():
 
     # Sheet 1: Summary
     ws = wb.active
-    ws.title = "Summary"
-    ws.append([f"Bus Attendance Summary{bus_title}  ({start} to {end})"])
+    ws.title = T["sheet_summary"]
+    ws.sheet_view.rightToLeft = rtl
+    ws.append([f"{T['summary_title']}{bus_title}  ({start} - {end})"])
     ws["A1"].font = Font(bold=True, size=14)
-    ws.append([f"School days with records: {n_days}    Students: {len(report['students'])}    Generated: {report['generated']}"])
+    ws.append([f"{T['school_days']}: {n_days}    {T['students']}: {len(report['students'])}    {T['generated']}: {report['generated']}"])
     ws.append([])
-    ws.append(["No", "National ID", "Name", "Class", "Bus", "Parent Phone", "Days Present", "Days Absent", "Attendance %"])
+    ws.append([T["no"], T["national_id"], T["name"], T["grade"], T["bus"], T["parent_phone"], T["days_present"], T["days_absent"], T["pct"]])
     style_header(ws, 4)
     for i, s in enumerate(report["students"], 1):
         present = len(report["by_student"].get(s["id"], {}))
@@ -461,13 +599,14 @@ def export_excel():
     ws.freeze_panes = "A5"
 
     # Sheet 2: Daily matrix
-    ws2 = wb.create_sheet("Daily")
-    header = ["National ID", "Name", "Class", "Bus"] + days + ["Total"]
+    ws2 = wb.create_sheet(T["sheet_daily"])
+    ws2.sheet_view.rightToLeft = rtl
+    header = [T["national_id"], T["name"], T["grade"], T["bus"]] + days + [T["total"]]
     ws2.append(header)
     style_header(ws2)
     for s in report["students"]:
         marks = report["by_student"].get(s["id"], {})
-        row = [s["national_id"], s["name"], s["grade"], s["bus_no"]] + ["P" if d in marks else "A" for d in days] + [len(marks)]
+        row = [s["national_id"], s["name"], s["grade"], s["bus_no"]] + [T["mark_present"] if d in marks else T["mark_absent"] for d in days] + [len(marks)]
         ws2.append(row)
         r = ws2.max_row
         for j, d in enumerate(days, start=5):
@@ -483,13 +622,14 @@ def export_excel():
     ws2.freeze_panes = "E2"
 
     # Sheet 3: Log
-    ws3 = wb.create_sheet("Log")
-    ws3.append(["Date", "Time", "National ID", "Name", "Class", "Bus", "Method"])
+    ws3 = wb.create_sheet(T["sheet_log"])
+    ws3.sheet_view.rightToLeft = rtl
+    ws3.append([T["date"], T["time"], T["national_id"], T["name"], T["grade"], T["bus"], T["method"]])
     style_header(ws3)
     lookup = {s["id"]: s for s in report["students"]}
     for r in report["records"]:
         s = lookup.get(r["student_id"], {})
-        ws3.append([r["day"], r["time"], s.get("national_id", ""), s.get("name", ""), s.get("grade", ""), s.get("bus_no", ""), r["method"]])
+        ws3.append([r["day"], r["time"], s.get("national_id", ""), s.get("name", ""), s.get("grade", ""), s.get("bus_no", ""), T.get("method_" + r["method"], r["method"])])
     for col, width in zip("ABCDEFG", (12, 10, 18, 30, 12, 10, 10)):
         ws3.column_dimensions[col].width = width
     ws3.freeze_panes = "A2"
@@ -515,11 +655,23 @@ def export_pdf():
 
     start, end = range_from_args()
     if start is None:
-        return jsonify({"error": "Invalid date range"}), 400
+        return jsonify({"error": msg("invalid_range")}), 400
     report = build_report(start, end, bus_from_args())
     days = report["days"]
     n_days = len(days)
-    bus_title = f" – Bus {report['bus_no']}" if report["bus_no"] else ""
+    T = report["T"]
+    rtl = report["lang"] == "ar"
+    bus_title = f" – {T['bus']} {report['bus_no']}" if report["bus_no"] else ""
+    register_pdf_fonts()
+    font, font_bold = "Amiri", "Amiri-Bold"
+
+    def cells(row):
+        """Shape every cell and, for Arabic, reverse the column order so the first column sits on the right."""
+        out = [shape(c) for c in row]
+        return out[::-1] if rtl else out
+
+    def widths(ws):
+        return ws[::-1] if rtl else ws
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -529,16 +681,20 @@ def export_pdf():
         rightMargin=12 * mm,
         topMargin=12 * mm,
         bottomMargin=12 * mm,
-        title="Bus Attendance Report",
+        title=T["report_title"],
     )
     styles = getSampleStyleSheet()
+    for name in ("Title", "Normal", "Heading2"):
+        styles[name].fontName = font_bold if name != "Normal" else font
+        if rtl and name != "Title":
+            styles[name].alignment = 2  # right
+    meta = (
+        f"{T['period']}: {start} - {end}   |   {T['school_days']}: {n_days}   |   "
+        f"{T['students']}: {len(report['students'])}   |   {T['generated']}: {report['generated']}"
+    )
     story = [
-        Paragraph(f"Bus Attendance Report{bus_title}", styles["Title"]),
-        Paragraph(
-            f"Period: <b>{start}</b> to <b>{end}</b> &nbsp;&nbsp; School days with records: <b>{n_days}</b> "
-            f"&nbsp;&nbsp; Students: <b>{len(report['students'])}</b> &nbsp;&nbsp; Generated: {report['generated']}",
-            styles["Normal"],
-        ),
+        Paragraph(shape(f"{T['report_title']}{bus_title}"), styles["Title"]),
+        Paragraph(shape(meta), styles["Normal"]),
         Spacer(1, 6 * mm),
     ]
 
@@ -546,7 +702,9 @@ def export_pdf():
         [
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E78")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTNAME", (0, 0), (-1, -1), font),
+            ("FONTNAME", (0, 0), (-1, 0), font_bold),
+            ("ALIGN", (0, 0), (-1, -1), "RIGHT" if rtl else "LEFT"),
             ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F2F2F2")]),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -554,36 +712,38 @@ def export_pdf():
     )
 
     # Summary table
-    data = [["No", "National ID", "Name", "Class", "Bus", "Parent Phone", "Present", "Absent", "%"]]
+    data = [cells([T["no"], T["national_id"], T["name"], T["grade"], T["bus"], T["parent_phone"], T["present"], T["absent"], "%"])]
     for i, s in enumerate(report["students"], 1):
         present = len(report["by_student"].get(s["id"], {}))
         pct = f"{100 * present / n_days:.0f}%" if n_days else "-"
-        data.append([i, s["national_id"], s["name"], s["grade"], s["bus_no"], s["parent_phone"], present, n_days - present, pct])
-    table = Table(data, repeatRows=1, colWidths=[10 * mm, 34 * mm, 70 * mm, 20 * mm, 16 * mm, 34 * mm, 20 * mm, 20 * mm, 16 * mm])
+        data.append(cells([i, s["national_id"], s["name"], s["grade"], s["bus_no"], s["parent_phone"], present, n_days - present, pct]))
+    table = Table(data, repeatRows=1, colWidths=widths([10 * mm, 34 * mm, 70 * mm, 20 * mm, 16 * mm, 34 * mm, 20 * mm, 20 * mm, 16 * mm]))
     table.setStyle(header_style)
-    table.setStyle(TableStyle([("FONTSIZE", (0, 0), (-1, -1), 8), ("ALIGN", (4, 1), (4, -1), "CENTER"), ("ALIGN", (6, 1), (-1, -1), "CENTER")]))
-    story.append(Paragraph("Summary (the full scan log is included in the Excel export)", styles["Heading2"]))
+    table.setStyle(TableStyle([("FONTSIZE", (0, 0), (-1, -1), 8)]))
+    story.append(Paragraph(shape(T["summary_heading"]), styles["Heading2"]))
     story.append(table)
 
     # Daily matrix (fits comfortably up to a month of school days)
     if 0 < n_days <= 31:
         story.append(PageBreak())
-        story.append(Paragraph("Daily attendance (P = present, blank = absent)", styles["Heading2"]))
+        story.append(Paragraph(shape(T["daily_heading"]), styles["Heading2"]))
         day_labels = [d[5:] for d in days]  # MM-DD
-        mdata = [["National ID", "Name", "Bus"] + day_labels + ["Tot"]]
+        mdata = [cells([T["national_id"], T["name"], T["bus"]] + day_labels + [T["total"]])]
         for s in report["students"]:
             marks = report["by_student"].get(s["id"], {})
-            mdata.append([s["national_id"], s["name"], s["bus_no"]] + ["P" if d in marks else "" for d in days] + [len(marks)])
+            mdata.append(cells([s["national_id"], s["name"], s["bus_no"]] + [T["mark_present"] if d in marks else "" for d in days] + [len(marks)]))
         avail = landscape(A4)[0] - 24 * mm - 32 * mm - 50 * mm - 14 * mm - 10 * mm
         day_w = min(12 * mm, avail / n_days)
-        mtable = Table(mdata, repeatRows=1, colWidths=[32 * mm, 50 * mm, 14 * mm] + [day_w] * n_days + [10 * mm])
+        mtable = Table(mdata, repeatRows=1, colWidths=widths([32 * mm, 50 * mm, 14 * mm] + [day_w] * n_days + [10 * mm]))
         mtable.setStyle(header_style)
+        # the day columns sit after the 3 identity columns (or before the mirrored ones in RTL)
+        day_first, day_last = (1, n_days) if rtl else (3, 2 + n_days)
         mtable.setStyle(
             TableStyle(
                 [
                     ("FONTSIZE", (0, 0), (-1, -1), 6),
-                    ("ALIGN", (2, 0), (-1, -1), "CENTER"),
-                    ("TEXTCOLOR", (3, 1), (-2, -1), colors.HexColor("#0B6623")),
+                    ("ALIGN", (day_first, 0), (day_last, -1), "CENTER"),
+                    ("TEXTCOLOR", (day_first, 1), (day_last, -1), colors.HexColor("#0B6623")),
                 ]
             )
         )

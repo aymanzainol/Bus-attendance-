@@ -3,6 +3,11 @@
 Mobile-friendly web app to take school-bus attendance for ~200 students with
 face recognition, and export the records as **Excel** or **PDF**.
 
+The interface is **Arabic (RTL) by default** with an English toggle in the top
+bar; the choice is remembered on the device. Exports follow the chosen
+language (`?lang=ar|en`), and Arabic PDFs are rendered with the bundled
+Amiri font plus proper text shaping.
+
 Two tabs only:
 
 | Tab | What it does |
@@ -41,6 +46,8 @@ The repo ships with a `Dockerfile` and `railway.json`; Railway builds it
 automatically. Attach a **volume** mounted at `/data` so the SQLite database
 survives redeploys (`DATA_DIR` defaults to `/data` in the image).
 
+Error messages from the API follow the `X-Lang` header (`ar` default, `en`).
+
 ## API (used by the frontend)
 
 | Method | Path | Purpose |
@@ -53,5 +60,5 @@ survives redeploys (`DATA_DIR` defaults to `/data` in the image).
 | GET | `/api/attendance?date=` | Records for a day |
 | POST | `/api/attendance` | Mark present (`student_id`, `day`, `time`, `method`) |
 | DELETE | `/api/attendance/<id>` | Undo a record |
-| GET | `/api/export/excel?from=&to=&bus=` | Excel workbook (`bus` optional) |
-| GET | `/api/export/pdf?from=&to=&bus=` | PDF report (`bus` optional) |
+| GET | `/api/export/excel?from=&to=&bus=&lang=` | Excel workbook (`bus`, `lang` optional) |
+| GET | `/api/export/pdf?from=&to=&bus=&lang=` | PDF report (`bus`, `lang` optional) |

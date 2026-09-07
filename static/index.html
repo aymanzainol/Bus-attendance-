@@ -1,51 +1,54 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
   <meta name="theme-color" content="#050608">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
-  <title>Bus Attendance</title>
+  <title>حضور الحافلة</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚌</text></svg>">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">🚌 Bus <b>Attendance</b></div>
-    <div id="model-status" class="model-status">Loading face models…</div>
+    <div class="brand" data-i18n="brand">🚌 حضور <b>الحافلة</b></div>
+    <div class="top-right">
+      <div id="model-status" class="model-status" data-i18n="models_loading">جارٍ تحميل نماذج الوجه…</div>
+      <button class="lang-btn" id="btn-lang" data-i18n="toggle_lang">EN</button>
+    </div>
   </header>
 
   <!-- ================= TAB 1: STUDENTS ================= -->
   <main id="tab-students" class="tab active">
     <section class="stats">
-      <div class="stat"><div class="stat-num" id="stat-total">0</div><div class="stat-label">Students</div></div>
-      <div class="stat"><div class="stat-num" id="stat-present">0</div><div class="stat-label">Present</div></div>
-      <div class="stat"><div class="stat-num" id="stat-absent">0</div><div class="stat-label">Absent</div></div>
+      <div class="stat"><div class="stat-num" id="stat-total">0</div><div class="stat-label" data-i18n="stat_students">الطلاب</div></div>
+      <div class="stat"><div class="stat-num" id="stat-present">0</div><div class="stat-label" data-i18n="stat_present">حاضر</div></div>
+      <div class="stat"><div class="stat-num" id="stat-absent">0</div><div class="stat-label" data-i18n="stat_absent">غائب</div></div>
     </section>
 
     <section class="card">
-      <h2>Export attendance</h2>
+      <h2 data-i18n="export_title">تصدير الحضور</h2>
       <div class="row">
-        <label>From <input type="date" id="export-from"></label>
-        <label>To <input type="date" id="export-to"></label>
+        <label><span data-i18n="from">من</span> <input type="date" id="export-from"></label>
+        <label><span data-i18n="to">إلى</span> <input type="date" id="export-to"></label>
       </div>
       <div class="row">
-        <label>Bus <select id="export-bus"><option value="">All buses</option></select></label>
+        <label><span data-i18n="bus">الحافلة</span> <select id="export-bus"><option value="">كل الحافلات</option></select></label>
       </div>
       <div class="row">
-        <a class="btn btn-green" id="btn-excel" href="#" download>📊 Excel</a>
-        <a class="btn btn-red" id="btn-pdf" href="#" download>📄 PDF</a>
+        <a class="btn btn-green" id="btn-excel" href="#" download data-i18n="excel">📊 إكسل</a>
+        <a class="btn btn-red" id="btn-pdf" href="#" download data-i18n="pdf">📄 PDF</a>
       </div>
     </section>
 
     <div class="chips" id="bus-chips"></div>
     <section class="list-head">
-      <input type="search" id="search" placeholder="Search name, national ID, class or bus…" autocomplete="off">
-      <button class="btn btn-primary" id="btn-add">＋ Add</button>
+      <input type="search" id="search" data-i18n-ph="search_ph" placeholder="ابحث بالاسم أو رقم الهوية أو الصف أو الحافلة…" autocomplete="off">
+      <button class="btn btn-primary" id="btn-add" data-i18n="add">＋ إضافة</button>
     </section>
     <ul id="student-list" class="student-list"></ul>
-    <p id="student-empty" class="empty hidden">No students yet. Tap <b>＋ Add</b> to register the first one.</p>
+    <p id="student-empty" class="empty hidden" data-i18n="no_students">لا يوجد طلاب بعد. اضغط <b>＋ إضافة</b> لتسجيل أول طالب.</p>
   </main>
 
   <!-- ================= TAB 2: SCAN ================= -->
@@ -54,46 +57,46 @@
       <div class="video-wrap">
         <video id="scan-video" autoplay muted playsinline></video>
         <canvas id="scan-canvas"></canvas>
-        <div id="scan-hint" class="scan-hint">Tap <b>Start camera</b> to begin scanning</div>
+        <div id="scan-hint" class="scan-hint" data-i18n="scan_hint">اضغط <b>تشغيل الكاميرا</b> لبدء المسح</div>
       </div>
       <div class="row">
-        <button class="btn btn-primary" id="btn-scan-toggle">▶ Start camera</button>
+        <button class="btn btn-primary" id="btn-scan-toggle">▶ تشغيل الكاميرا</button>
         <button class="btn" id="btn-scan-flip" title="Switch camera">🔄</button>
       </div>
     </section>
 
     <section class="card">
       <div class="present-head">
-        <h2>Present today</h2>
-        <span class="pill" id="present-count">0 / 0</span>
+        <h2 data-i18n="present_today">الحاضرون اليوم</h2>
+        <span class="pill ltr" id="present-count">0 / 0</span>
       </div>
       <div class="chips" id="scan-bus-chips"></div>
       <div class="row">
-        <input type="search" id="manual-search" placeholder="Mark manually: type a name or national ID…" autocomplete="off">
+        <input type="search" id="manual-search" data-i18n-ph="manual_ph" placeholder="تسجيل يدوي: اكتب الاسم أو رقم الهوية…" autocomplete="off">
       </div>
       <ul id="manual-results" class="manual-results"></ul>
       <ul id="present-list" class="present-list"></ul>
-      <p id="present-empty" class="empty">Nobody marked yet today.</p>
+      <p id="present-empty" class="empty" data-i18n="nobody_yet">لم يُسجَّل أحد اليوم بعد.</p>
     </section>
   </main>
 
   <!-- ================= BOTTOM NAV ================= -->
   <nav class="tabbar">
-    <button class="tab-btn active" data-tab="tab-students"><span class="ico">👥</span>Students</button>
-    <button class="tab-btn" data-tab="tab-scan"><span class="ico">📷</span>Scan</button>
+    <button class="tab-btn active" data-tab="tab-students"><span class="ico">👥</span><span data-i18n="tab_students">الطلاب</span></button>
+    <button class="tab-btn" data-tab="tab-scan"><span class="ico">📷</span><span data-i18n="tab_scan">مسح</span></button>
   </nav>
 
   <!-- ================= ADD STUDENT MODAL ================= -->
   <div id="modal-add" class="modal hidden">
     <div class="sheet">
-      <div class="sheet-head"><h2>Add student</h2><button class="close" data-close="modal-add">✕</button></div>
+      <div class="sheet-head"><h2 data-i18n="add_student">إضافة طالب</h2><button class="close" data-close="modal-add">✕</button></div>
       <form id="form-add" autocomplete="off">
-        <label>Full name <input type="text" id="add-name" required maxlength="80"></label>
-        <label>National ID <input type="text" id="add-no" required maxlength="40" inputmode="numeric" placeholder="e.g. 120512-10-1234"></label>
-        <label>Parent phone number <input type="tel" id="add-parent" maxlength="30" placeholder="e.g. 012-3456789"></label>
+        <label><span data-i18n="full_name">الاسم الكامل</span> <input type="text" id="add-name" required maxlength="80"></label>
+        <label><span data-i18n="national_id">رقم الهوية الوطنية</span> <input type="text" id="add-no" required maxlength="40" inputmode="numeric" dir="ltr" data-i18n-ph="national_id_ph" placeholder="مثال: 120512-10-1234"></label>
+        <label><span data-i18n="parent_phone">رقم هاتف ولي الأمر</span> <input type="tel" id="add-parent" maxlength="30" dir="ltr" data-i18n-ph="parent_phone_ph" placeholder="مثال: 012-3456789"></label>
         <div class="row">
-          <label>Class / Grade <input type="text" id="add-grade" maxlength="40" placeholder="e.g. 5A"></label>
-          <label>Bus number <input type="text" id="add-bus" maxlength="40" placeholder="e.g. 3" inputmode="numeric"></label>
+          <label><span data-i18n="grade">الصف</span> <input type="text" id="add-grade" maxlength="40" data-i18n-ph="grade_ph" placeholder="مثال: 5أ"></label>
+          <label><span data-i18n="bus_number">رقم الحافلة</span> <input type="text" id="add-bus" maxlength="40" inputmode="numeric" data-i18n-ph="bus_ph" placeholder="مثال: 3"></label>
         </div>
 
         <div class="face-box">
@@ -101,18 +104,18 @@
             <video id="add-video" autoplay muted playsinline></video>
             <canvas id="add-canvas"></canvas>
             <img id="add-preview" class="hidden" alt="">
-            <div id="add-hint" class="scan-hint">Camera off</div>
+            <div id="add-hint" class="scan-hint" data-i18n="camera_off">الكاميرا مغلقة</div>
           </div>
           <div class="row">
-            <button type="button" class="btn" id="btn-add-cam">📷 Camera</button>
-            <button type="button" class="btn btn-primary" id="btn-add-capture" disabled>Capture face</button>
-            <label class="btn file-btn">🖼 Photo<input type="file" id="add-file" accept="image/*" hidden></label>
+            <button type="button" class="btn" id="btn-add-cam">📷 الكاميرا</button>
+            <button type="button" class="btn btn-primary" id="btn-add-capture" disabled data-i18n="capture_face">التقاط الوجه</button>
+            <label class="btn file-btn"><span data-i18n="photo">🖼 صورة</span><input type="file" id="add-file" accept="image/*" hidden></label>
           </div>
-          <div class="samples" id="add-samples">No face captured yet. Capture 1–3 samples (different angles work best).</div>
+          <div class="samples" id="add-samples"></div>
         </div>
 
         <div id="add-error" class="error hidden"></div>
-        <button type="submit" class="btn btn-primary btn-block" id="btn-add-save">Save student</button>
+        <button type="submit" class="btn btn-primary btn-block" id="btn-add-save" data-i18n="save_student">حفظ الطالب</button>
       </form>
     </div>
   </div>
@@ -120,7 +123,7 @@
   <!-- ================= STUDENT DETAIL MODAL ================= -->
   <div id="modal-detail" class="modal hidden">
     <div class="sheet">
-      <div class="sheet-head"><h2>Student</h2><button class="close" data-close="modal-detail">✕</button></div>
+      <div class="sheet-head"><h2 data-i18n="student">الطالب</h2><button class="close" data-close="modal-detail">✕</button></div>
       <div class="detail-top">
         <img id="detail-photo" class="avatar big" alt="">
         <div>
@@ -131,16 +134,17 @@
         </div>
       </div>
       <div class="row">
-        <button class="btn btn-green" id="btn-detail-mark">✓ Mark present today</button>
-        <button class="btn btn-red" id="btn-detail-delete">🗑 Delete</button>
+        <button class="btn btn-green" id="btn-detail-mark" data-i18n="mark_present_today">✓ تسجيل حضور اليوم</button>
+        <button class="btn btn-red" id="btn-detail-delete" data-i18n="delete">🗑 حذف</button>
       </div>
-      <h3>Attendance history</h3>
+      <h3 data-i18n="history">سجل الحضور</h3>
       <ul id="detail-history" class="history"></ul>
     </div>
   </div>
 
   <div id="toast" class="toast hidden"></div>
 
+  <script src="/static/i18n.js"></script>
   <script src="/static/vendor/face-api.min.js"></script>
   <script src="/static/app.js"></script>
 </body>

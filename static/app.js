@@ -48,12 +48,12 @@
   }
   async function api(path, opts = {}) {
     const res = await fetch(path, {
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-Lang": getLang() },
       ...opts,
       body: opts.body ? JSON.stringify(opts.body) : undefined,
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    if (!res.ok) throw new Error(data.error || t("request_failed", { code: res.status }));
     return data;
   }
   function initials(name) {
@@ -73,14 +73,14 @@
   function renderBusChips() {
     const buses = busList();
     const html = buses.length
-      ? [`<button class="chip${busFilter === "" ? " active" : ""}" data-bus="">All buses</button>`]
-          .concat(buses.map((b) => `<button class="chip${busFilter === b ? " active" : ""}" data-bus="${escapeHtml(b)}">🚌 Bus ${escapeHtml(b)}</button>`)).join("")
+      ? [`<button class="chip${busFilter === "" ? " active" : ""}" data-bus="">${t("all_buses")}</button>`]
+          .concat(buses.map((b) => `<button class="chip${busFilter === b ? " active" : ""}" data-bus="${escapeHtml(b)}">${t("bus_n", { n: escapeHtml(b) })}</button>`)).join("")
       : "";
     $("bus-chips").innerHTML = html;
     $("scan-bus-chips").innerHTML = html;
     const sel = $("export-bus");
     const current = sel.value;
-    sel.innerHTML = `<option value="">All buses</option>` + buses.map((b) => `<option value="${escapeHtml(b)}">Bus ${escapeHtml(b)}</option>`).join("");
+    sel.innerHTML = `<option value="">${t("all_buses")}</option>` + buses.map((b) => `<option value="${escapeHtml(b)}">${t("bus_option", { n: escapeHtml(b) })}</option>`).join("");
     sel.value = buses.includes(current) ? current : "";
     updateExportLinks();
   }
@@ -137,12 +137,12 @@
         faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
       ]);
       modelsReady = true;
-      st.textContent = "Face models ready";
+      st.textContent = t("models_ready");
       st.className = "model-status ok";
       $("btn-add-capture").disabled = !addStream;
     } catch (e) {
       console.error(e);
-      st.textContent = "Face models failed to load";
+      st.textContent = t("models_failed");
       st.className = "model-status err";
     }
   }
@@ -187,11 +187,11 @@
         ${avatarHtml(s)}
         <div class="info">
           <div class="name">${escapeHtml(s.name)}</div>
-          <div class="sub">${busTag(s)}${escapeHtml(s.national_id)}${s.grade ? " · " + escapeHtml(s.grade) : ""} · ${s.total_days} day${s.total_days === 1 ? "" : "s"}</div>
+          <div class="sub">${busTag(s)}<span class="ltr">${escapeHtml(s.national_id)}</span>${s.grade ? " · " + escapeHtml(s.grade) : ""} · ${t("days", { n: s.total_days })}</div>
         </div>
         ${s.present_today
-          ? `<span class="badge present">✓ ${escapeHtml((s.time_today || "").slice(0, 5))}</span>`
-          : (s.descriptors && s.descriptors.length ? `<span class="badge absent">Absent</span>` : `<span class="badge noface">No face</span>`)}
+          ? `<span class="badge present ltr">✓ ${escapeHtml((s.time_today || "").slice(0, 5))}</span>`
+          : (s.descriptors && s.descriptors.length ? `<span class="badge absent">${t("absent")}</span>` : `<span class="badge noface">${t("no_face")}</span>`)}
       </li>`).join("");
     $("student-empty").classList.toggle("hidden", students.length > 0);
   }
@@ -206,10 +206,10 @@
         ${avatarHtml(r)}
         <div class="info">
           <div class="name">${escapeHtml(r.name)}</div>
-          <div class="sub">${busTag(r)}${escapeHtml(r.national_id)}${r.grade ? " · " + escapeHtml(r.grade) : ""} · ${r.method}</div>
+          <div class="sub">${busTag(r)}<span class="ltr">${escapeHtml(r.national_id)}</span>${r.grade ? " · " + escapeHtml(r.grade) : ""} · ${t("method_" + r.method)}</div>
         </div>
-        <span class="badge present">${escapeHtml(r.time.slice(0, 5))}</span>
-        <button class="undo" data-undo="${r.id}" title="Remove">Undo</button>
+        <span class="badge present ltr">${escapeHtml(r.time.slice(0, 5))}</span>
+        <button class="undo" data-undo="${r.id}">${t("undo")}</button>
       </li>`).join("");
     $("present-empty").classList.toggle("hidden", records.length > 0);
     const total = busFilter ? students.filter((s) => s.bus_no === busFilter).length : data.total_students;
@@ -222,9 +222,9 @@
       body: { student_id: student.id, day: todayStr(), time: nowTime(), method },
     });
     if (res.already_marked) {
-      toast(`${student.name} already marked at ${res.time.slice(0, 5)}`, "warn");
+      toast(t("already_marked", { name: student.name, t: res.time.slice(0, 5) }), "warn");
     } else {
-      toast(`✓ ${student.name} marked present`, "ok");
+      toast(t("marked", { name: student.name }), "ok");
       if (navigator.vibrate) navigator.vibrate(80);
     }
     const s = students.find((x) => x.id === student.id);
@@ -237,15 +237,15 @@
 
   // ---------------------------------------------------------------- scan
   async function startScan() {
-    if (!modelsReady) return toast("Face models are still loading…", "warn");
+    if (!modelsReady) return toast(t("models_still_loading"), "warn");
     try {
       scanStream = await openCamera($("scan-video"), scanFacing);
     } catch (e) {
       console.error(e);
-      return toast("Camera access denied or unavailable", "err");
+      return toast(t("camera_denied"), "err");
     }
     $("scan-hint").classList.add("hidden");
-    $("btn-scan-toggle").textContent = "■ Stop camera";
+    $("btn-scan-toggle").textContent = t("stop_camera");
     scanTimer = setInterval(scanFrame, SCAN_INTERVAL_MS);
   }
   function stopScan() {
@@ -254,7 +254,7 @@
     const c = $("scan-canvas");
     c.getContext("2d").clearRect(0, 0, c.width, c.height);
     $("scan-hint").classList.remove("hidden");
-    $("btn-scan-toggle").textContent = "▶ Start camera";
+    $("btn-scan-toggle").textContent = t("start_camera");
   }
   async function scanFrame() {
     const video = $("scan-video");
@@ -272,18 +272,18 @@
       ctx.font = "bold 18px sans-serif";
       for (const r of resized) {
         const box = r.detection.box;
-        let label = "Unknown", color = "#e74c3c", student = null;
+        let label = t("unknown"), color = "#e74c3c", student = null;
         if (matcher) {
           const best = matcher.findBestMatch(r.descriptor);
           if (best.label !== "unknown") {
             student = students.find((s) => String(s.id) === best.label);
             if (student) {
-              label = `${student.name}${student.bus_no ? " · Bus " + student.bus_no : ""} (${Math.round((1 - best.distance) * 100)}%)`;
+              label = `${student.name}${student.bus_no ? " · " + t("bus_option", { n: student.bus_no }) : ""} (${Math.round((1 - best.distance) * 100)}%)`;
               color = student.present_today ? "#2ecc71" : "#f1c40f";
             }
           }
         } else {
-          label = "No students registered";
+          label = t("no_students_registered");
         }
         ctx.strokeStyle = color;
         ctx.strokeRect(box.x, box.y, box.width, box.height);
@@ -322,10 +322,10 @@
   function updateSamplesLabel() {
     const el = $("add-samples");
     if (addSamples.length === 0) {
-      el.textContent = "No face captured yet. Capture 1–3 samples (different angles work best).";
+      el.textContent = t("no_sample");
       el.className = "samples";
     } else {
-      el.textContent = `✓ ${addSamples.length} face sample${addSamples.length > 1 ? "s" : ""} captured${addSamples.length < 3 ? " — capture more for better accuracy" : ""}`;
+      el.textContent = t("samples_ok", { n: addSamples.length }) + (addSamples.length < 3 ? t("samples_more") : "");
       el.className = "samples ok";
     }
   }
@@ -333,11 +333,11 @@
     try {
       addStream = await openCamera($("add-video"), addFacing);
     } catch (e) {
-      return toast("Camera access denied or unavailable", "err");
+      return toast(t("camera_denied"), "err");
     }
     $("add-preview").classList.add("hidden");
     $("add-hint").classList.add("hidden");
-    $("btn-add-cam").textContent = "🔄 Flip";
+    $("btn-add-cam").textContent = t("flip");
     $("btn-add-capture").disabled = !modelsReady;
     addTimer = setInterval(addFrame, SCAN_INTERVAL_MS);
   }
@@ -347,7 +347,7 @@
     const c = $("add-canvas");
     c.getContext("2d").clearRect(0, 0, c.width, c.height);
     $("add-hint").classList.remove("hidden");
-    $("btn-add-cam").textContent = "📷 Camera";
+    $("btn-add-cam").textContent = t("camera");
     $("btn-add-capture").disabled = true;
   }
   async function addFrame() {
@@ -374,15 +374,15 @@
     }
   }
   function captureSample() {
-    if (!lastAddDetection) return toast("No face detected — move closer and face the camera", "warn");
-    if (addSamples.length >= 5) return toast("Enough samples captured", "warn");
+    if (!lastAddDetection) return toast(t("no_face_detected"), "warn");
+    if (addSamples.length >= 5) return toast(t("enough_samples"), "warn");
     addSamples.push(lastAddDetection.descriptor);
     if (!addPhoto) addPhoto = cropThumb($("add-video"), lastAddDetection.detection.box);
     updateSamplesLabel();
-    toast(`Sample ${addSamples.length} captured`, "ok");
+    toast(t("sample_captured", { n: addSamples.length }), "ok");
   }
   async function useUploadedPhoto(file) {
-    if (!modelsReady) return toast("Face models are still loading…", "warn");
+    if (!modelsReady) return toast(t("models_still_loading"), "warn");
     stopAddCam();
     const err = $("add-error");
     err.classList.add("hidden");
@@ -395,17 +395,17 @@
       const det = await faceapi.detectSingleFace(img, new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.4 }))
         .withFaceLandmarks(true).withFaceDescriptor();
       if (!det) {
-        err.textContent = "No face found in that photo. Try a clearer, front-facing photo.";
+        err.textContent = t("no_face_in_photo");
         err.classList.remove("hidden");
         return;
       }
       addSamples.push(det.descriptor);
       addPhoto = cropThumb(img, det.detection.box);
       updateSamplesLabel();
-      toast("Face captured from photo", "ok");
+      toast(t("face_from_photo"), "ok");
     } catch (e) {
       console.error(e);
-      err.textContent = "Could not read that image.";
+      err.textContent = t("bad_image");
       err.classList.remove("hidden");
     }
   }
@@ -425,11 +425,11 @@
         photo: addPhoto,
         descriptors: addSamples.map((d) => Array.from(d)),
       };
-      if (!body.descriptors.length && !confirm("No face captured. Save without face recognition? (You can only mark this student manually.)")) {
+      if (!body.descriptors.length && !confirm(t("save_without_face"))) {
         return;
       }
       await api("/api/students", { method: "POST", body });
-      toast(`${body.name} added`, "ok");
+      toast(t("added", { name: body.name }), "ok");
       closeModal("modal-add");
       await loadStudents();
     } catch (e) {
@@ -447,19 +447,19 @@
     detailStudent = s;
     $("detail-photo").outerHTML = avatarHtml(s, true).replace(/^<(\w+)/, '<$1 id="detail-photo"');
     $("detail-name").textContent = s.name;
-    $("detail-meta").textContent = `${s.national_id}${s.grade ? " · " + s.grade : ""}${s.bus_no ? " · Bus " + s.bus_no : ""}${s.descriptors && s.descriptors.length ? ` · ${s.descriptors.length} face sample${s.descriptors.length > 1 ? "s" : ""}` : " · no face registered"}`;
-    $("detail-status").textContent = s.present_today ? `Present today at ${(s.time_today || "").slice(0, 5)}` : "Not marked today";
+    $("detail-meta").innerHTML = `<span class="ltr">${escapeHtml(s.national_id)}</span>${s.grade ? " · " + escapeHtml(s.grade) : ""}${s.bus_no ? " · " + t("bus_option", { n: escapeHtml(s.bus_no) }) : ""} · ${s.descriptors && s.descriptors.length ? t("face_samples", { n: s.descriptors.length }) : t("no_face_registered")}`;
+    $("detail-status").textContent = s.present_today ? t("present_at", { t: (s.time_today || "").slice(0, 5) }) : t("not_marked");
     $("detail-parent").innerHTML = s.parent_phone
-      ? `Parent: <a class="tel" href="tel:${escapeHtml(s.parent_phone.replace(/[^+\d]/g, ""))}">📞 ${escapeHtml(s.parent_phone)}</a>`
-      : "Parent: no phone number";
+      ? `${t("parent")} <a class="tel ltr" href="tel:${escapeHtml(s.parent_phone.replace(/[^+\d]/g, ""))}">📞 ${escapeHtml(s.parent_phone)}</a>`
+      : `${t("parent")} ${t("no_phone")}`;
     $("btn-detail-mark").disabled = !!s.present_today;
-    $("detail-history").innerHTML = "<li>Loading…</li>";
+    $("detail-history").innerHTML = `<li>${t("loading")}</li>`;
     openModal("modal-detail");
     try {
       const data = await api(`/api/students/${id}/history`);
       $("detail-history").innerHTML = data.records.length
-        ? data.records.map((r) => `<li><span>${r.day}</span><span>${r.time.slice(0, 5)} · ${r.method}</span></li>`).join("")
-        : "<li class='muted'>No attendance yet</li>";
+        ? data.records.map((r) => `<li><span class="ltr">${r.day}</span><span><span class="ltr">${r.time.slice(0, 5)}</span> · ${t("method_" + r.method)}</span></li>`).join("")
+        : `<li class='muted'>${t("no_history")}</li>`;
     } catch (e) {
       $("detail-history").innerHTML = `<li class='muted'>${escapeHtml(e.message)}</li>`;
     }
@@ -477,8 +477,8 @@
     const from = $("export-from").value || monthStart();
     const to = $("export-to").value || todayStr();
     const bus = encodeURIComponent($("export-bus").value || "");
-    $("btn-excel").href = `/api/export/excel?from=${from}&to=${to}&bus=${bus}`;
-    $("btn-pdf").href = `/api/export/pdf?from=${from}&to=${to}&bus=${bus}`;
+    $("btn-excel").href = `/api/export/excel?from=${from}&to=${to}&bus=${bus}&lang=${getLang()}`;
+    $("btn-pdf").href = `/api/export/pdf?from=${from}&to=${to}&bus=${bus}&lang=${getLang()}`;
   }
 
   // ---------------------------------------------------------------- wiring
@@ -531,10 +531,10 @@
       catch (e) { toast(e.message, "err"); }
     });
     $("btn-detail-delete").addEventListener("click", async () => {
-      if (!detailStudent || !confirm(`Delete ${detailStudent.name} and all their attendance records?`)) return;
+      if (!detailStudent || !confirm(t("confirm_delete", { name: detailStudent.name }))) return;
       try {
         await api(`/api/students/${detailStudent.id}`, { method: "DELETE" });
-        toast("Student deleted");
+        toast(t("deleted"));
         closeModal("modal-detail");
         await loadStudents();
       } catch (e) { toast(e.message, "err"); }
@@ -555,7 +555,7 @@
       if (!btn) return;
       try {
         await api(`/api/attendance/${btn.dataset.undo}`, { method: "DELETE" });
-        toast("Removed");
+        toast(t("removed"));
         await Promise.all([loadPresent(), loadStudents()]);
       } catch (err) { toast(err.message, "err"); }
     });
@@ -567,9 +567,9 @@
       box.innerHTML = rows.map((s) => `
         <li data-manual="${s.id}">
           ${avatarHtml(s)}
-          <div class="info"><div class="name">${escapeHtml(s.name)}</div><div class="sub">${busTag(s)}${escapeHtml(s.national_id)}${s.grade ? " · " + escapeHtml(s.grade) : ""}</div></div>
-          <span class="badge present">Mark ✓</span>
-        </li>`).join("") || `<li><div class="info sub">No unmarked student matches</div></li>`;
+          <div class="info"><div class="name">${escapeHtml(s.name)}</div><div class="sub">${busTag(s)}<span class="ltr">${escapeHtml(s.national_id)}</span>${s.grade ? " · " + escapeHtml(s.grade) : ""}</div></div>
+          <span class="badge present">${t("mark")}</span>
+        </li>`).join("") || `<li><div class="info sub">${t("no_match")}</div></li>`;
     });
     $("manual-results").addEventListener("click", async (e) => {
       const li = e.target.closest("[data-manual]");
@@ -579,6 +579,19 @@
       try { await markPresent(s, "manual"); $("manual-search").value = ""; $("manual-results").innerHTML = ""; }
       catch (err) { toast(err.message, "err"); }
     });
+
+    // Language toggle: re-render everything that is built in JS
+    $("btn-lang").addEventListener("click", () => setLang(getLang() === "ar" ? "en" : "ar"));
+    document.addEventListener("langchange", () => {
+      $("btn-scan-toggle").textContent = scanStream ? t("stop_camera") : t("start_camera");
+      $("btn-add-cam").textContent = addStream ? t("flip") : t("camera");
+      updateSamplesLabel();
+      renderBusChips();
+      renderStudents();
+      renderStats();
+      loadPresent();
+    });
+    updateSamplesLabel();
 
     // Stop cameras when the page is hidden (saves battery, releases the camera)
     document.addEventListener("visibilitychange", () => { if (document.hidden) { stopScan(); stopAddCam(); } });
