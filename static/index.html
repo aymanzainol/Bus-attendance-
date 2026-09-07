@@ -53,6 +53,9 @@
         <a class="btn btn-green" id="btn-excel" href="#" download data-i18n="excel">📊 إكسل</a>
         <a class="btn btn-red" id="btn-pdf" href="#" download data-i18n="pdf">📄 PDF</a>
       </div>
+      <div class="row">
+        <a class="btn" id="btn-qrcards" href="#" download data-i18n="qr_cards">🪪 بطاقات QR</a>
+      </div>
     </section>
 
     <div class="chips" id="bus-chips"></div>
@@ -151,6 +154,11 @@
         <button class="btn btn-green" id="btn-detail-mark" data-i18n="mark_present_today">✓ تسجيل حضور اليوم</button>
         <button class="btn btn-red" id="btn-detail-delete" data-i18n="delete">🗑 حذف</button>
       </div>
+      <h3 data-i18n="qr_title">رمز QR للطالب</h3>
+      <div class="qr-box">
+        <img id="detail-qr" class="qr-img" alt="QR">
+        <a class="btn btn-primary" id="btn-detail-card" href="#" download data-i18n="print_card">🖨 طباعة البطاقة</a>
+      </div>
       <h3 data-i18n="history">سجل الحضور</h3>
       <ul id="detail-history" class="history"></ul>
     </div>
@@ -160,6 +168,7 @@
 
   <script src="/static/i18n.js"></script>
   <script src="/static/vendor/face-api.min.js"></script>
+  <script src="/static/vendor/jsQR.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

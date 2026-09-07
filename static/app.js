@@ -28,6 +28,10 @@
   let scanStream = null, scanTimer = null, scanBusy = false, scanFacing = "environment";
   let scanWanted = false;           // the user pressed Start and has not pressed Stop (survives tab switches / screen lock)
   let scanBusySince = 0, scanErrors = 0, wakeLock = null;
+  const QR_PREFIX = "BUS:";
+  let qrByToken = new Map();      // qr token -> student
+  let qrCanvas = null;            // offscreen canvas used to decode QR codes with jsQR
+  const barcodeDetector = ("BarcodeDetector" in window) ? new window.BarcodeDetector({ formats: ["qr_code"] }) : null;
   let addStream = null, addTimer = null, addBusy = false, addFacing = "user";
   let addSamples = [];            // Float32Array descriptors captured for the new student
   let addPhoto = "";              // data URL thumbnail for the new student
@@ -200,6 +204,35 @@
       .filter((s) => s.descriptors && s.descriptors.length)
       .map((s) => new faceapi.LabeledFaceDescriptors(String(s.id), s.descriptors.map((d) => new Float32Array(d))));
     matcher = labeled.length ? new faceapi.FaceMatcher(labeled, MATCH_THRESHOLD) : null;
+    qrByToken = new Map(students.filter((s) => s.qr_token).map((s) => [s.qr_token, s]));
+  }
+
+  // ------------------------------------------------------------------ QR
+  async function decodeQr(video) {
+    // returns [{data, corners:[{x,y}...]}] in video pixel coordinates
+    if (barcodeDetector) {
+      try {
+        const codes = await barcodeDetector.detect(video);
+        return codes.map((c) => ({ data: c.rawValue, corners: c.cornerPoints }));
+      } catch (e) { /* fall through to jsQR */ }
+    }
+    if (typeof jsQR !== "function") return [];
+    const scale = Math.min(1, 640 / video.videoWidth);
+    const w = Math.round(video.videoWidth * scale), h = Math.round(video.videoHeight * scale);
+    if (!qrCanvas) qrCanvas = document.createElement("canvas");
+    qrCanvas.width = w; qrCanvas.height = h;
+    const ctx = qrCanvas.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(video, 0, 0, w, h);
+    const img = ctx.getImageData(0, 0, w, h);
+    const code = jsQR(img.data, w, h, { inversionAttempts: "dontInvert" });
+    if (!code || !code.data) return [];
+    const L = code.location;
+    const pts = [L.topLeftCorner, L.topRightCorner, L.bottomRightCorner, L.bottomLeftCorner].map((p) => ({ x: p.x / scale, y: p.y / scale }));
+    return [{ data: code.data, corners: pts }];
+  }
+  function studentFromQr(data) {
+    if (typeof data !== "string" || !data.startsWith(QR_PREFIX)) return null;
+    return qrByToken.get(data.slice(QR_PREFIX.length).trim()) || null;
   }
 
   // ------------------------------------------------------------ students
@@ -265,18 +298,27 @@
   }
 
   async function markPresent(student, method) {
-    const res = await api("/api/attendance", {
-      method: "POST",
-      body: { student_id: student.id, day: todayStr(), time: nowTime(), method },
-    });
+    // optimistic: flag the student before the request returns so a fast next frame cannot post again
+    const target = students.find((x) => x.id === student.id) || student;
+    const wasPresent = target.present_today;
+    target.present_today = true;
+    let res;
+    try {
+      res = await api("/api/attendance", {
+        method: "POST",
+        body: { student_id: student.id, day: todayStr(), time: nowTime(), method },
+      });
+    } catch (e) {
+      target.present_today = wasPresent;
+      throw e;
+    }
     if (res.already_marked) {
       toast(t("already_marked", { name: student.name, t: res.time.slice(0, 5) }), "warn");
     } else {
-      toast(t("marked", { name: student.name }), "ok");
+      toast(t(method === "qr" ? "qr_marked" : "marked", { name: student.name }), "ok");
       if (navigator.vibrate) navigator.vibrate(80);
     }
-    const s = students.find((x) => x.id === student.id);
-    if (s && !s.present_today) { s.present_today = true; s.time_today = res.time; s.total_days += 1; }
+    if (!wasPresent) { target.time_today = res.time; if (!res.already_marked) target.total_days += 1; }
     renderStats();
     renderStudents();
     loadPresent();
@@ -347,9 +389,10 @@
     }
     scanBusy = true; scanBusySince = Date.now();
     try {
+      const qrCodes = await decodeQr(video).catch(() => []);
       const results = await faceapi.detectAllFaces(video, DETECT_OPTS()).withFaceLandmarks(true).withFaceDescriptors();
       scanErrors = 0;
-      setScanStatus(t("scan_running", { faces: results.length, det: DETECTOR.kind.toUpperCase() }), "ok");
+      setScanStatus(t("scan_running", { faces: results.length, det: DETECTOR.kind.toUpperCase() }) + (qrCodes.length ? " · QR" : ""), "ok");
       const canvas = $("scan-canvas");
       const size = { width: video.videoWidth, height: video.videoHeight };
       faceapi.matchDimensions(canvas, size);
@@ -358,6 +401,26 @@
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.lineWidth = 3;
       ctx.font = "bold 18px sans-serif";
+      for (const q of qrCodes) {
+        const student = studentFromQr(q.data);
+        const color = student ? (student.present_today ? "#2ecc71" : "#3b82f6") : "#e74c3c";
+        ctx.strokeStyle = color;
+        ctx.beginPath();
+        q.corners.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+        ctx.closePath(); ctx.stroke();
+        const label = student ? `QR · ${student.name}` : t("unknown_qr");
+        const top = Math.min(...q.corners.map((p) => p.y)), left = Math.min(...q.corners.map((p) => p.x));
+        const tw = ctx.measureText(label).width + 12;
+        ctx.fillStyle = color; ctx.fillRect(left, Math.max(0, top - 26), tw, 26);
+        ctx.fillStyle = "#000"; ctx.fillText(label, left + 6, Math.max(18, top - 7));
+        if (student) {
+          const last = recentlyMarked.get(student.id) || 0;
+          if (!student.present_today && Date.now() - last > RESCAN_COOLDOWN_MS) {
+            recentlyMarked.set(student.id, Date.now());
+            markPresent(student, "qr").catch((e) => toast(e.message, "err"));
+          }
+        }
+      }
       for (const r of resized) {
         const box = r.detection.box;
         let label = t("unknown"), color = "#e74c3c", student = null;
@@ -525,10 +588,11 @@
       if (!body.descriptors.length && !confirm(t("save_without_face"))) {
         return;
       }
-      await api("/api/students", { method: "POST", body });
+      const created = await api("/api/students", { method: "POST", body });
       toast(t("added", { name: body.name }), "ok");
       closeModal("modal-add");
       await loadStudents();
+      openDetail(created.id);
     } catch (e) {
       err.textContent = e.message;
       err.classList.remove("hidden");
@@ -550,6 +614,8 @@
       ? `${t("parent")} <a class="tel ltr" href="tel:${escapeHtml(s.parent_phone.replace(/[^+\d]/g, ""))}">📞 ${escapeHtml(s.parent_phone)}</a>`
       : `${t("parent")} ${t("no_phone")}`;
     $("btn-detail-mark").disabled = !!s.present_today;
+    $("detail-qr").src = `/api/students/${s.id}/qr.svg`;
+    $("btn-detail-card").href = `/api/export/qrcards?student=${s.id}&lang=${getLang()}`;
     $("detail-history").innerHTML = `<li>${t("loading")}</li>`;
     openModal("modal-detail");
     try {
@@ -615,6 +681,7 @@
     const q = `from=${from}&to=${to}&bus=${bus}&period=${period}&lang=${getLang()}`;
     $("btn-excel").href = `/api/export/excel?${q}`;
     $("btn-pdf").href = `/api/export/pdf?${q}`;
+    $("btn-qrcards").href = `/api/export/qrcards?bus=${bus}&lang=${getLang()}`;
     $("range-caption").innerHTML = t("range_caption", {
       from: `${weekdayName(from)} ${hijriDate(from)} <span class="ltr">(${from})</span>`,
       to: `${weekdayName(to)} ${hijriDate(to)} <span class="ltr">(${to})</span>`,

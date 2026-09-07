@@ -7,6 +7,7 @@ import io
 import json
 import os
 import re
+import secrets
 import sqlite3
 from datetime import date, datetime
 
@@ -15,6 +16,9 @@ from flask import Flask, g, jsonify, request, send_file, send_from_directory
 import arabic_reshaper
 from bidi.algorithm import get_display
 from hijridate import Gregorian
+import segno
+
+QR_PREFIX = "BUS:"  # QR payload is QR_PREFIX + the student's secret token
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(BASE_DIR, "data"))
@@ -81,6 +85,10 @@ STRINGS = {
         "method": "الطريقة",
         "method_face": "وجه",
         "method_manual": "يدوي",
+        "method_qr": "QR",
+        "qr_card_title": "بطاقة حضور الحافلة",
+        "qr_card_hint": "امسح الرمز عند صعود الحافلة",
+        "qr_cards_title": "بطاقات QR للطلاب",
         "mark_present": "حاضر",
         "mark_absent": "غائب",
     },
@@ -136,6 +144,10 @@ STRINGS = {
         "method": "Method",
         "method_face": "face",
         "method_manual": "manual",
+        "method_qr": "QR",
+        "qr_card_title": "Bus attendance card",
+        "qr_card_hint": "Scan when boarding the bus",
+        "qr_cards_title": "Student QR cards",
         "mark_present": "Present",
         "mark_absent": "Absent",
     },
@@ -218,6 +230,14 @@ def close_db(_exc):
         db.close()
 
 
+def new_qr_token():
+    return secrets.token_urlsafe(12)  # 16 url-safe characters, unguessable
+
+
+def qr_payload(token):
+    return QR_PREFIX + token
+
+
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     conn.executescript(
@@ -229,6 +249,7 @@ def init_db():
             grade       TEXT NOT NULL DEFAULT '',
             bus_no      TEXT NOT NULL DEFAULT '',
             parent_phone TEXT NOT NULL DEFAULT '',
+            qr_token    TEXT NOT NULL DEFAULT '',
             photo       TEXT NOT NULL DEFAULT '',
             descriptors TEXT NOT NULL DEFAULT '[]',
             created_at  TEXT NOT NULL
@@ -251,6 +272,12 @@ def init_db():
         conn.execute("ALTER TABLE students ADD COLUMN bus_no TEXT NOT NULL DEFAULT ''")
     if "parent_phone" not in cols:
         conn.execute("ALTER TABLE students ADD COLUMN parent_phone TEXT NOT NULL DEFAULT ''")
+    if "qr_token" not in cols:
+        conn.execute("ALTER TABLE students ADD COLUMN qr_token TEXT NOT NULL DEFAULT ''")
+    # every student gets a QR token (existing rows included)
+    for (sid,) in conn.execute("SELECT id FROM students WHERE qr_token = ''").fetchall():
+        conn.execute("UPDATE students SET qr_token = ? WHERE id = ?", (new_qr_token(), sid))
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_students_qr ON students(qr_token)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_students_bus ON students(bus_no)")
     conn.commit()
     conn.close()
@@ -284,6 +311,7 @@ def student_row_to_dict(row, include_descriptors=True):
         "grade": row["grade"],
         "bus_no": row["bus_no"],
         "parent_phone": row["parent_phone"],
+        "qr_token": row["qr_token"],
         "photo": row["photo"],
         "created_at": row["created_at"],
     }
@@ -390,9 +418,9 @@ def create_student():
     db = get_db()
     try:
         cur = db.execute(
-            "INSERT INTO students (national_id, name, grade, bus_no, parent_phone, photo, descriptors, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (national_id, name, grade, bus_no, parent_phone, photo, descriptors, datetime.now().isoformat(timespec="seconds")),
+            "INSERT INTO students (national_id, name, grade, bus_no, parent_phone, qr_token, photo, descriptors, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (national_id, name, grade, bus_no, parent_phone, new_qr_token(), photo, descriptors, datetime.now().isoformat(timespec="seconds")),
         )
         db.commit()
     except sqlite3.IntegrityError:
@@ -493,7 +521,7 @@ def mark_attendance():
     time_str = payload.get("time") or datetime.now().strftime("%H:%M:%S")
     if not re.match(r"^\d{2}:\d{2}(:\d{2})?$", str(time_str)):
         time_str = datetime.now().strftime("%H:%M:%S")
-    method = payload.get("method") if payload.get("method") in ("face", "manual") else "face"
+    method = payload.get("method") if payload.get("method") in ("face", "manual", "qr") else "face"
 
     db = get_db()
     student = db.execute("SELECT * FROM students WHERE id = ?", (student_id,)).fetchone()
@@ -605,6 +633,106 @@ def period_from_args(start, end):
     if period not in ("daily", "weekly", "monthly", "custom"):
         period = "daily" if start == end else "custom"
     return period
+
+
+@app.route("/api/students/<int:student_id>/qr.svg")
+def student_qr_svg(student_id):
+    db = get_db()
+    row = db.execute("SELECT qr_token FROM students WHERE id = ?", (student_id,)).fetchone()
+    if row is None:
+        return jsonify({"error": msg("not_found")}), 404
+    buf = io.BytesIO()
+    segno.make(qr_payload(row["qr_token"]), error="m").save(buf, kind="svg", scale=8, border=2, dark="#000000", light="#ffffff")
+    buf.seek(0)
+    resp = send_file(buf, mimetype="image/svg+xml")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+@app.route("/api/export/qrcards")
+def export_qr_cards():
+    """Printable A4 sheet of QR cards (8 per page) for all students, one bus, or one student."""
+    from reportlab.graphics.barcode import qr
+    from reportlab.graphics.shapes import Drawing
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.pdfgen import canvas as pdfcanvas
+
+    T = STRINGS[current_lang()]
+    db = get_db()
+    bus_no = bus_from_args()
+    student_id = request.args.get("student", type=int)
+    if student_id:
+        rows = db.execute("SELECT * FROM students WHERE id = ?", (student_id,)).fetchall()
+    elif bus_no:
+        rows = db.execute("SELECT * FROM students WHERE bus_no = ? ORDER BY name COLLATE NOCASE", (bus_no,)).fetchall()
+    else:
+        rows = db.execute("SELECT * FROM students ORDER BY bus_no, name COLLATE NOCASE").fetchall()
+    if not rows:
+        return jsonify({"error": msg("not_found")}), 404
+
+    register_pdf_fonts()
+    buf = io.BytesIO()
+    c = pdfcanvas.Canvas(buf, pagesize=A4)
+    c.setTitle(T["qr_cards_title"])
+    page_w, page_h = A4
+    cols, rows_per_page = 2, 4
+    margin = 12 * mm
+    card_w = (page_w - 2 * margin) / cols
+    card_h = (page_h - 2 * margin) / rows_per_page
+    qr_size = 38 * mm
+
+    for i, s in enumerate(rows):
+        k = i % (cols * rows_per_page)
+        if i and k == 0:
+            c.showPage()
+        col, row = k % cols, k // cols
+        x = margin + col * card_w
+        y = page_h - margin - (row + 1) * card_h
+        # card frame (dashed = cut line)
+        c.setStrokeColor(colors.HexColor("#9AA3B2"))
+        c.setDash(3, 3)
+        c.roundRect(x + 2 * mm, y + 2 * mm, card_w - 4 * mm, card_h - 4 * mm, 4 * mm)
+        c.setDash()
+        # QR on one side, text on the other
+        widget = qr.QrCodeWidget(qr_payload(s["qr_token"]), barLevel="M")
+        bx0, by0, bx1, by1 = widget.getBounds()
+        d = Drawing(qr_size, qr_size, transform=[qr_size / (bx1 - bx0), 0, 0, qr_size / (by1 - by0), 0, 0])
+        d.add(widget)
+        qr_x = x + 6 * mm
+        d.drawOn(c, qr_x, y + (card_h - qr_size) / 2)
+        tx_right = x + card_w - 6 * mm
+        tx_left = qr_x + qr_size + 4 * mm
+        text_w = tx_right - tx_left
+        c.setFillColor(colors.HexColor("#1F4E78"))
+        c.setFont("Amiri-Bold", 9)
+        c.drawRightString(tx_right, y + card_h - 10 * mm, shape(T["qr_card_title"]))
+        c.setFillColor(colors.black)
+        name = s["name"]
+        size = 14
+        while size > 8 and c.stringWidth(shape(name), "Amiri-Bold", size) > text_w:
+            size -= 1
+        c.setFont("Amiri-Bold", size)
+        c.drawRightString(tx_right, y + card_h - 21 * mm, shape(name))
+        # national ID: label on one line, the number itself on the next (kept LTR so digit groups are not reordered)
+        c.setFillColor(colors.HexColor("#6B7684"))
+        c.setFont("Amiri", 8)
+        c.drawRightString(tx_right, y + card_h - 28 * mm, shape(T["national_id"]))
+        c.setFillColor(colors.black)
+        c.setFont("Amiri-Bold", 11)
+        c.drawRightString(tx_right, y + card_h - 34 * mm, s["national_id"])
+        c.setFont("Amiri", 10)
+        parts = [f"{T['grade']}: {s['grade']}" if s["grade"] else "", f"{T['bus']}: {s['bus_no']}" if s["bus_no"] else ""]
+        c.drawRightString(tx_right, y + card_h - 42 * mm, shape("   ".join(x for x in parts if x)))
+        c.setFillColor(colors.HexColor("#6B7684"))
+        c.setFont("Amiri", 8)
+        c.drawRightString(tx_right, y + 8 * mm, shape(T["qr_card_hint"]))
+        c.setFillColor(colors.black)
+    c.save()
+    buf.seek(0)
+    suffix = f"_student-{student_id}" if student_id else (f"_bus-{re.sub(r'[^A-Za-z0-9-]+', '', bus_no)}" if bus_no else "")
+    return send_file(buf, as_attachment=True, download_name=f"qr-cards{suffix}.pdf", mimetype="application/pdf")
 
 
 @app.route("/api/export/excel")

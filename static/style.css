@@ -257,6 +257,9 @@ input[type=month] { width: 100%; margin-top: 6px; padding: 12px 14px; font-size:
 .detail-top { display: flex; gap: 14px; align-items: center; margin-bottom: 16px; }
 .detail-name { font-size: 21px; font-weight: 800; }
 .tel { color: var(--green); font-weight: 700; text-decoration: none; }
+.qr-box { display: flex; align-items: center; gap: 14px; background: #fff; border-radius: 14px; padding: 10px; margin-bottom: 6px; }
+.qr-img { width: 132px; height: 132px; flex: 0 0 auto; border-radius: 8px; background: #fff; }
+.qr-box .btn { flex: 1; }
 .history li { display: flex; justify-content: space-between; gap: 8px; padding: 9px 4px; border-bottom: 1px solid var(--border); font-size: 13px; }
 .history li span:first-child { flex: 1; }
 .history li span:last-child { color: var(--muted); }

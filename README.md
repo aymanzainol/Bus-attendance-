@@ -13,7 +13,7 @@ Two tabs only:
 | Tab | What it does |
 | --- | --- |
 | **Students** | Add a student (name, national ID, class, bus number, parent phone) and register their face with the phone camera or an uploaded photo. See who is present/absent today, attendance history per student, filter by bus, and export a **daily, weekly, monthly or custom** report (all buses or one bus) to Excel / PDF. |
-| **Scan** | Live camera. Every recognised face is marked present automatically (once per day). Shows today's present list with undo, plus a manual-mark search for students the camera cannot see. |
+| **Scan** | Live camera. Every recognised face **or student QR code** is marked present automatically (once per day). Shows today's present list with undo, plus a manual-mark search for students the camera cannot see. |
 
 ## How it works
 
@@ -31,6 +31,12 @@ Two tabs only:
   retries a busy camera, restarts if the camera track ends, and reloads the
   page if the face engine stops responding. A status line under the video
   shows the camera state, the detector in use and any error name.
+* Every student gets an unguessable QR token (`qr_token`, created on insert and
+  back-filled for existing rows). The QR payload is `BUS:<token>`. The student
+  page shows the code and prints a card; the export card prints A4 sheets of
+  8 cards (all students or one bus). QR codes are decoded in the browser with
+  the native `BarcodeDetector` where available, otherwise **jsQR**, in the
+  same camera loop as face recognition.
 * The Flask backend (`app.py`) stores students, their face descriptors and
   attendance in SQLite, and produces the exports with **openpyxl** and
   **reportlab**.
@@ -71,8 +77,10 @@ Error messages from the API follow the `X-Lang` header (`ar` default, `en`).
 | GET | `/api/buses` | Distinct bus numbers with student counts |
 | PUT/DELETE | `/api/students/<id>` | Update / delete |
 | GET | `/api/students/<id>/history` | Attendance history |
+| GET | `/api/students/<id>/qr.svg` | The student's QR code as SVG |
+| GET | `/api/export/qrcards?bus=&student=&lang=` | Printable A4 sheet of QR cards |
 | GET | `/api/attendance?date=` | Records for a day |
-| POST | `/api/attendance` | Mark present (`student_id`, `day`, `time`, `method`) |
+| POST | `/api/attendance` | Mark present (`student_id`, `day`, `time`, `method` = face/qr/manual) |
 | DELETE | `/api/attendance/<id>` | Undo a record |
 | GET | `/api/export/excel?from=&to=&period=&bus=&lang=` | Excel workbook (`period` = daily/weekly/monthly/custom) |
 | GET | `/api/export/pdf?from=&to=&period=&bus=&lang=` | PDF report (same parameters) |
