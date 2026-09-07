@@ -81,7 +81,7 @@
   }
   function avatarHtml(s, big = false) {
     const cls = `avatar${big ? " big" : ""}`;
-    if (s.photo) return `<img class="${cls}" src="${s.photo}" alt="">`;
+    if (s.photo) return `<img class="${cls}" src="${s.photo}" alt="" loading="lazy" decoding="async">`;
     return `<div class="${cls} placeholder">${initials(s.name)}</div>`;
   }
   function busTag(s) {
@@ -235,7 +235,7 @@
         ${avatarHtml(s)}
         <div class="info">
           <div class="name">${escapeHtml(s.name)}</div>
-          <div class="sub">${busTag(s)}<span class="ltr">${escapeHtml(s.national_id)}</span>${s.grade ? " · " + escapeHtml(s.grade) : ""} · ${t("days", { n: s.total_days })}</div>
+          <div class="sub">${busTag(s)}<span class="ltr">${escapeHtml(s.national_id)}</span>${s.grade ? " · " + escapeHtml(s.grade) : ""} · <span class="nowrap">${t("days", { n: s.total_days })}</span></div>
         </div>
         ${s.present_today
           ? `<span class="badge present ltr">✓ ${escapeHtml((s.time_today || "").slice(0, 5))}</span>`
@@ -563,10 +563,15 @@
   }
 
   // ---------------------------------------------------------------- modals
-  function openModal(id) { $(id).classList.remove("hidden"); }
+  function openModal(id) { $(id).classList.remove("hidden"); document.body.classList.add("modal-open"); }
   function closeModal(id) {
     $(id).classList.add("hidden");
+    if (!document.querySelector(".modal:not(.hidden)")) document.body.classList.remove("modal-open");
     if (id === "modal-add") stopAddCam();
+  }
+  function debounce(fn, ms) {
+    let timer = null;
+    return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), ms); };
   }
 
   // ---------------------------------------------------------------- export
@@ -629,7 +634,7 @@
     });
 
     // Students tab
-    $("search").addEventListener("input", renderStudents);
+    $("search").addEventListener("input", debounce(renderStudents, 120));
     $("student-list").addEventListener("click", (e) => {
       const li = e.target.closest("li[data-id]");
       if (li) openDetail(Number(li.dataset.id));
@@ -695,7 +700,7 @@
         await Promise.all([loadPresent(), loadStudents()]);
       } catch (err) { toast(err.message, "err"); }
     });
-    $("manual-search").addEventListener("input", () => {
+    $("manual-search").addEventListener("input", debounce(() => {
       const q = $("manual-search").value.trim().toLowerCase();
       const box = $("manual-results");
       if (!q) { box.innerHTML = ""; return; }
@@ -706,7 +711,7 @@
           <div class="info"><div class="name">${escapeHtml(s.name)}</div><div class="sub">${busTag(s)}<span class="ltr">${escapeHtml(s.national_id)}</span>${s.grade ? " · " + escapeHtml(s.grade) : ""}</div></div>
           <span class="badge present">${t("mark")}</span>
         </li>`).join("") || `<li><div class="info sub">${t("no_match")}</div></li>`;
-    });
+    }, 120));
     $("manual-results").addEventListener("click", async (e) => {
       const li = e.target.closest("[data-manual]");
       if (!li) return;
