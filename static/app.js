@@ -35,6 +35,9 @@
     const d = new Date();
     return [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, "0")).join(":");
   }
+  function weekdayName(iso) {
+    return new Date(iso + "T00:00:00").toLocaleDateString(getLang() === "ar" ? "ar" : "en", { weekday: "long" });
+  }
   function monthStart() {
     return todayStr().slice(0, 8) + "01";
   }
@@ -458,7 +461,7 @@
     try {
       const data = await api(`/api/students/${id}/history`);
       $("detail-history").innerHTML = data.records.length
-        ? data.records.map((r) => `<li><span class="ltr">${r.day}</span><span><span class="ltr">${r.time.slice(0, 5)}</span> · ${t("method_" + r.method)}</span></li>`).join("")
+        ? data.records.map((r) => `<li><span>${weekdayName(r.day)} <span class="ltr">${r.day}</span></span><span><span class="ltr">${r.time.slice(0, 5)}</span> · ${t("method_" + r.method)}</span></li>`).join("")
         : `<li class='muted'>${t("no_history")}</li>`;
     } catch (e) {
       $("detail-history").innerHTML = `<li class='muted'>${escapeHtml(e.message)}</li>`;
@@ -513,7 +516,10 @@
     const q = `from=${from}&to=${to}&bus=${bus}&period=${period}&lang=${getLang()}`;
     $("btn-excel").href = `/api/export/excel?${q}`;
     $("btn-pdf").href = `/api/export/pdf?${q}`;
-    $("range-caption").innerHTML = t("range_caption", { from: `<span class="ltr">${from}</span>`, to: `<span class="ltr">${to}</span>` });
+    $("range-caption").innerHTML = t("range_caption", {
+      from: `${weekdayName(from)} <span class="ltr">${from}</span>`,
+      to: `${weekdayName(to)} <span class="ltr">${to}</span>`,
+    });
   }
 
   // ---------------------------------------------------------------- wiring

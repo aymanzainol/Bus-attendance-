@@ -27,7 +27,7 @@ Two tabs only:
   attendance in SQLite, and produces the exports with **openpyxl** and
   **reportlab**.
 * Excel export has three sheets: `Summary` (present/absent/% per student, or
-  status + time-in for a daily report), `Daily` (student × date grid with
+  status, weekday, date and time-in for a daily report), `Daily` (student × date grid, weekday + date headers, with
   حاضر / غائب per day) and `Log` (every scan with time). The PDF contains the
   summary and the daily grid (split into blocks of days so it always fits).
   Weeks start on Sunday (`WEEK_START` in `static/app.js`).
