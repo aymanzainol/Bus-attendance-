@@ -1,0 +1,539 @@
+/* Bus Attendance - frontend
+ * Face detection + recognition run entirely in the browser (face-api.js).
+ * The server only stores students, their 128-d face descriptors and attendance.
+ */
+(function () {
+  "use strict";
+
+  const MODEL_URL = "/static/models";
+  const MATCH_THRESHOLD = 0.5;      // euclidean distance; lower = stricter (0.6 is face-api default)
+  const SCAN_INTERVAL_MS = 300;     // how often a frame is analysed while scanning
+  const RESCAN_COOLDOWN_MS = 8000;  // do not re-post the same student within this window
+  const DETECT_OPTS = () => new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
+
+  const $ = (id) => document.getElementById(id);
+
+  // ------------------------------------------------------------------ state
+  let students = [];              // from /api/students (includes descriptors)
+  let matcher = null;             // faceapi.FaceMatcher built from students
+  let modelsReady = false;
+  let scanStream = null, scanTimer = null, scanBusy = false, scanFacing = "environment";
+  let addStream = null, addTimer = null, addBusy = false, addFacing = "user";
+  let addSamples = [];            // Float32Array descriptors captured for the new student
+  let addPhoto = "";              // data URL thumbnail for the new student
+  let lastAddDetection = null;    // latest detection in the add-student camera
+  let detailStudent = null;
+  const recentlyMarked = new Map(); // student id -> timestamp of last post
+
+  // --------------------------------------------------------------- helpers
+  function todayStr() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+  function nowTime() {
+    const d = new Date();
+    return [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, "0")).join(":");
+  }
+  function monthStart() {
+    return todayStr().slice(0, 8) + "01";
+  }
+  let toastTimer = null;
+  function toast(msg, kind = "") {
+    const el = $("toast");
+    el.textContent = msg;
+    el.className = `toast ${kind}`;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.add("hidden"), 2600);
+  }
+  async function api(path, opts = {}) {
+    const res = await fetch(path, {
+      headers: { "Content-Type": "application/json" },
+      ...opts,
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    return data;
+  }
+  function initials(name) {
+    return name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join("");
+  }
+  function avatarHtml(s, big = false) {
+    const cls = `avatar${big ? " big" : ""}`;
+    if (s.photo) return `<img class="${cls}" src="${s.photo}" alt="">`;
+    return `<div class="${cls} placeholder">${initials(s.name)}</div>`;
+  }
+  function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+  async function openCamera(video, facing) {
+    const constraints = { audio: false, video: { facingMode: { ideal: facing }, width: { ideal: 640 }, height: { ideal: 480 } } };
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (e) {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: true });
+    }
+    video.srcObject = stream;
+    await new Promise((resolve) => {
+      if (video.readyState >= 2) return resolve();
+      video.onloadedmetadata = () => resolve();
+    });
+    await video.play().catch(() => {});
+    return stream;
+  }
+  function stopStream(stream, video) {
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+    if (video) video.srcObject = null;
+  }
+  function cropThumb(source, box, size = 112) {
+    // source: video or image element; box: {x,y,width,height} in source pixel coords
+    const c = document.createElement("canvas");
+    c.width = size; c.height = size;
+    const ctx = c.getContext("2d");
+    const pad = Math.max(box.width, box.height) * 0.25;
+    const side = Math.max(box.width, box.height) + pad * 2;
+    const sx = box.x + box.width / 2 - side / 2;
+    const sy = box.y + box.height / 2 - side / 2;
+    ctx.drawImage(source, sx, sy, side, side, 0, 0, size, size);
+    return c.toDataURL("image/jpeg", 0.8);
+  }
+
+  // ------------------------------------------------------------- models
+  async function loadModels() {
+    const st = $("model-status");
+    try {
+      await Promise.all([
+        faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+        faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL),
+        faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
+      ]);
+      modelsReady = true;
+      st.textContent = "Face models ready";
+      st.className = "model-status ok";
+      $("btn-add-capture").disabled = !addStream;
+    } catch (e) {
+      console.error(e);
+      st.textContent = "Face models failed to load";
+      st.className = "model-status err";
+    }
+  }
+
+  function rebuildMatcher() {
+    const labeled = students
+      .filter((s) => s.descriptors && s.descriptors.length)
+      .map((s) => new faceapi.LabeledFaceDescriptors(String(s.id), s.descriptors.map((d) => new Float32Array(d))));
+    matcher = labeled.length ? new faceapi.FaceMatcher(labeled, MATCH_THRESHOLD) : null;
+  }
+
+  // ------------------------------------------------------------ students
+  async function loadStudents() {
+    const data = await api(`/api/students?date=${todayStr()}`);
+    students = data.students;
+    rebuildMatcher();
+    renderStudents();
+    renderStats();
+  }
+
+  function renderStats() {
+    const present = students.filter((s) => s.present_today).length;
+    $("stat-total").textContent = students.length;
+    $("stat-present").textContent = present;
+    $("stat-absent").textContent = students.length - present;
+    $("present-count").textContent = `${present} / ${students.length}`;
+  }
+
+  function renderStudents() {
+    const q = $("search").value.trim().toLowerCase();
+    const list = $("student-list");
+    const rows = students.filter((s) =>
+      !q || s.name.toLowerCase().includes(q) || s.student_no.toLowerCase().includes(q) || (s.grade || "").toLowerCase().includes(q)
+    );
+    list.innerHTML = rows.map((s) => `
+      <li data-id="${s.id}">
+        ${avatarHtml(s)}
+        <div class="info">
+          <div class="name">${escapeHtml(s.name)}</div>
+          <div class="sub">${escapeHtml(s.student_no)}${s.grade ? " · " + escapeHtml(s.grade) : ""} · ${s.total_days} day${s.total_days === 1 ? "" : "s"}</div>
+        </div>
+        ${s.present_today
+          ? `<span class="badge present">✓ ${escapeHtml((s.time_today || "").slice(0, 5))}</span>`
+          : (s.descriptors && s.descriptors.length ? `<span class="badge absent">Absent</span>` : `<span class="badge noface">No face</span>`)}
+      </li>`).join("");
+    $("student-empty").classList.toggle("hidden", students.length > 0);
+  }
+
+  // ------------------------------------------------------------- present
+  async function loadPresent() {
+    const data = await api(`/api/attendance?date=${todayStr()}`);
+    const list = $("present-list");
+    list.innerHTML = data.records.map((r) => `
+      <li data-record="${r.id}">
+        ${avatarHtml(r)}
+        <div class="info">
+          <div class="name">${escapeHtml(r.name)}</div>
+          <div class="sub">${escapeHtml(r.student_no)}${r.grade ? " · " + escapeHtml(r.grade) : ""} · ${r.method}</div>
+        </div>
+        <span class="badge present">${escapeHtml(r.time.slice(0, 5))}</span>
+        <button class="undo" data-undo="${r.id}" title="Remove">Undo</button>
+      </li>`).join("");
+    $("present-empty").classList.toggle("hidden", data.records.length > 0);
+    $("present-count").textContent = `${data.records.length} / ${data.total_students}`;
+  }
+
+  async function markPresent(student, method) {
+    const res = await api("/api/attendance", {
+      method: "POST",
+      body: { student_id: student.id, day: todayStr(), time: nowTime(), method },
+    });
+    if (res.already_marked) {
+      toast(`${student.name} already marked at ${res.time.slice(0, 5)}`, "warn");
+    } else {
+      toast(`✓ ${student.name} marked present`, "ok");
+      if (navigator.vibrate) navigator.vibrate(80);
+    }
+    const s = students.find((x) => x.id === student.id);
+    if (s && !s.present_today) { s.present_today = true; s.time_today = res.time; s.total_days += 1; }
+    renderStats();
+    renderStudents();
+    loadPresent();
+    return res;
+  }
+
+  // ---------------------------------------------------------------- scan
+  async function startScan() {
+    if (!modelsReady) return toast("Face models are still loading…", "warn");
+    try {
+      scanStream = await openCamera($("scan-video"), scanFacing);
+    } catch (e) {
+      console.error(e);
+      return toast("Camera access denied or unavailable", "err");
+    }
+    $("scan-hint").classList.add("hidden");
+    $("btn-scan-toggle").textContent = "■ Stop camera";
+    scanTimer = setInterval(scanFrame, SCAN_INTERVAL_MS);
+  }
+  function stopScan() {
+    clearInterval(scanTimer); scanTimer = null;
+    stopStream(scanStream, $("scan-video")); scanStream = null;
+    const c = $("scan-canvas");
+    c.getContext("2d").clearRect(0, 0, c.width, c.height);
+    $("scan-hint").classList.remove("hidden");
+    $("btn-scan-toggle").textContent = "▶ Start camera";
+  }
+  async function scanFrame() {
+    const video = $("scan-video");
+    if (scanBusy || !scanStream || video.readyState < 2 || video.videoWidth === 0) return;
+    scanBusy = true;
+    try {
+      const results = await faceapi.detectAllFaces(video, DETECT_OPTS()).withFaceLandmarks(true).withFaceDescriptors();
+      const canvas = $("scan-canvas");
+      const size = { width: video.videoWidth, height: video.videoHeight };
+      faceapi.matchDimensions(canvas, size);
+      const resized = faceapi.resizeResults(results, size);
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.lineWidth = 3;
+      ctx.font = "bold 18px sans-serif";
+      for (const r of resized) {
+        const box = r.detection.box;
+        let label = "Unknown", color = "#e74c3c", student = null;
+        if (matcher) {
+          const best = matcher.findBestMatch(r.descriptor);
+          if (best.label !== "unknown") {
+            student = students.find((s) => String(s.id) === best.label);
+            if (student) {
+              label = `${student.name} (${Math.round((1 - best.distance) * 100)}%)`;
+              color = student.present_today ? "#2ecc71" : "#f1c40f";
+            }
+          }
+        } else {
+          label = "No students registered";
+        }
+        ctx.strokeStyle = color;
+        ctx.strokeRect(box.x, box.y, box.width, box.height);
+        const tw = ctx.measureText(label).width + 12;
+        ctx.fillStyle = color;
+        ctx.fillRect(box.x, Math.max(0, box.y - 26), tw, 26);
+        ctx.fillStyle = "#000";
+        ctx.fillText(label, box.x + 6, Math.max(18, box.y - 7));
+
+        if (student) {
+          const last = recentlyMarked.get(student.id) || 0;
+          if (!student.present_today && Date.now() - last > RESCAN_COOLDOWN_MS) {
+            recentlyMarked.set(student.id, Date.now());
+            markPresent(student, "face").catch((e) => toast(e.message, "err"));
+          }
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      scanBusy = false;
+    }
+  }
+
+  // ----------------------------------------------------------- add student
+  function resetAddForm() {
+    $("form-add").reset();
+    addSamples = []; addPhoto = ""; lastAddDetection = null;
+    $("add-preview").classList.add("hidden");
+    $("add-preview").src = "";
+    $("add-error").classList.add("hidden");
+    updateSamplesLabel();
+  }
+  function updateSamplesLabel() {
+    const el = $("add-samples");
+    if (addSamples.length === 0) {
+      el.textContent = "No face captured yet. Capture 1–3 samples (different angles work best).";
+      el.className = "samples";
+    } else {
+      el.textContent = `✓ ${addSamples.length} face sample${addSamples.length > 1 ? "s" : ""} captured${addSamples.length < 3 ? " — capture more for better accuracy" : ""}`;
+      el.className = "samples ok";
+    }
+  }
+  async function startAddCam() {
+    try {
+      addStream = await openCamera($("add-video"), addFacing);
+    } catch (e) {
+      return toast("Camera access denied or unavailable", "err");
+    }
+    $("add-preview").classList.add("hidden");
+    $("add-hint").classList.add("hidden");
+    $("btn-add-cam").textContent = "🔄 Flip";
+    $("btn-add-capture").disabled = !modelsReady;
+    addTimer = setInterval(addFrame, SCAN_INTERVAL_MS);
+  }
+  function stopAddCam() {
+    clearInterval(addTimer); addTimer = null;
+    stopStream(addStream, $("add-video")); addStream = null;
+    const c = $("add-canvas");
+    c.getContext("2d").clearRect(0, 0, c.width, c.height);
+    $("add-hint").classList.remove("hidden");
+    $("btn-add-cam").textContent = "📷 Camera";
+    $("btn-add-capture").disabled = true;
+  }
+  async function addFrame() {
+    const video = $("add-video");
+    if (addBusy || !addStream || !modelsReady || video.readyState < 2 || video.videoWidth === 0) return;
+    addBusy = true;
+    try {
+      const det = await faceapi.detectSingleFace(video, DETECT_OPTS()).withFaceLandmarks(true).withFaceDescriptor();
+      lastAddDetection = det || null;
+      const canvas = $("add-canvas");
+      const size = { width: video.videoWidth, height: video.videoHeight };
+      faceapi.matchDimensions(canvas, size);
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (det) {
+        const box = faceapi.resizeResults(det, size).detection.box;
+        ctx.strokeStyle = "#2ecc71"; ctx.lineWidth = 3;
+        ctx.strokeRect(box.x, box.y, box.width, box.height);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      addBusy = false;
+    }
+  }
+  function captureSample() {
+    if (!lastAddDetection) return toast("No face detected — move closer and face the camera", "warn");
+    if (addSamples.length >= 5) return toast("Enough samples captured", "warn");
+    addSamples.push(lastAddDetection.descriptor);
+    if (!addPhoto) addPhoto = cropThumb($("add-video"), lastAddDetection.detection.box);
+    updateSamplesLabel();
+    toast(`Sample ${addSamples.length} captured`, "ok");
+  }
+  async function useUploadedPhoto(file) {
+    if (!modelsReady) return toast("Face models are still loading…", "warn");
+    stopAddCam();
+    const err = $("add-error");
+    err.classList.add("hidden");
+    try {
+      const img = await faceapi.bufferToImage(file);
+      const preview = $("add-preview");
+      preview.src = img.src;
+      preview.classList.remove("hidden");
+      $("add-hint").classList.add("hidden");
+      const det = await faceapi.detectSingleFace(img, new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.4 }))
+        .withFaceLandmarks(true).withFaceDescriptor();
+      if (!det) {
+        err.textContent = "No face found in that photo. Try a clearer, front-facing photo.";
+        err.classList.remove("hidden");
+        return;
+      }
+      addSamples.push(det.descriptor);
+      addPhoto = cropThumb(img, det.detection.box);
+      updateSamplesLabel();
+      toast("Face captured from photo", "ok");
+    } catch (e) {
+      console.error(e);
+      err.textContent = "Could not read that image.";
+      err.classList.remove("hidden");
+    }
+  }
+  async function saveStudent(ev) {
+    ev.preventDefault();
+    const err = $("add-error");
+    err.classList.add("hidden");
+    const btn = $("btn-add-save");
+    btn.disabled = true;
+    try {
+      const body = {
+        name: $("add-name").value.trim(),
+        student_no: $("add-no").value.trim(),
+        grade: $("add-grade").value.trim(),
+        photo: addPhoto,
+        descriptors: addSamples.map((d) => Array.from(d)),
+      };
+      if (!body.descriptors.length && !confirm("No face captured. Save without face recognition? (You can only mark this student manually.)")) {
+        return;
+      }
+      await api("/api/students", { method: "POST", body });
+      toast(`${body.name} added`, "ok");
+      closeModal("modal-add");
+      await loadStudents();
+    } catch (e) {
+      err.textContent = e.message;
+      err.classList.remove("hidden");
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // ---------------------------------------------------------------- detail
+  async function openDetail(id) {
+    const s = students.find((x) => x.id === id);
+    if (!s) return;
+    detailStudent = s;
+    $("detail-photo").outerHTML = avatarHtml(s, true).replace(/^<(\w+)/, '<$1 id="detail-photo"');
+    $("detail-name").textContent = s.name;
+    $("detail-meta").textContent = `${s.student_no}${s.grade ? " · " + s.grade : ""}${s.descriptors && s.descriptors.length ? ` · ${s.descriptors.length} face sample${s.descriptors.length > 1 ? "s" : ""}` : " · no face registered"}`;
+    $("detail-status").textContent = s.present_today ? `Present today at ${(s.time_today || "").slice(0, 5)}` : "Not marked today";
+    $("btn-detail-mark").disabled = !!s.present_today;
+    $("detail-history").innerHTML = "<li>Loading…</li>";
+    openModal("modal-detail");
+    try {
+      const data = await api(`/api/students/${id}/history`);
+      $("detail-history").innerHTML = data.records.length
+        ? data.records.map((r) => `<li><span>${r.day}</span><span>${r.time.slice(0, 5)} · ${r.method}</span></li>`).join("")
+        : "<li class='muted'>No attendance yet</li>";
+    } catch (e) {
+      $("detail-history").innerHTML = `<li class='muted'>${escapeHtml(e.message)}</li>`;
+    }
+  }
+
+  // ---------------------------------------------------------------- modals
+  function openModal(id) { $(id).classList.remove("hidden"); }
+  function closeModal(id) {
+    $(id).classList.add("hidden");
+    if (id === "modal-add") stopAddCam();
+  }
+
+  // ---------------------------------------------------------------- export
+  function updateExportLinks() {
+    const from = $("export-from").value || monthStart();
+    const to = $("export-to").value || todayStr();
+    $("btn-excel").href = `/api/export/excel?from=${from}&to=${to}`;
+    $("btn-pdf").href = `/api/export/pdf?from=${from}&to=${to}`;
+  }
+
+  // ---------------------------------------------------------------- wiring
+  function wire() {
+    // Tabs
+    document.querySelectorAll(".tab-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
+        document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.id === btn.dataset.tab));
+        if (btn.dataset.tab === "tab-scan") loadPresent();
+        else { stopScan(); loadStudents(); }
+      });
+    });
+
+    // Students tab
+    $("search").addEventListener("input", renderStudents);
+    $("student-list").addEventListener("click", (e) => {
+      const li = e.target.closest("li[data-id]");
+      if (li) openDetail(Number(li.dataset.id));
+    });
+    $("btn-add").addEventListener("click", () => { resetAddForm(); openModal("modal-add"); });
+    $("export-from").value = monthStart();
+    $("export-to").value = todayStr();
+    $("export-from").addEventListener("change", updateExportLinks);
+    $("export-to").addEventListener("change", updateExportLinks);
+    updateExportLinks();
+
+    // Add student modal
+    $("btn-add-cam").addEventListener("click", async () => {
+      if (addStream) { addFacing = addFacing === "user" ? "environment" : "user"; stopAddCam(); }
+      await startAddCam();
+    });
+    $("btn-add-capture").addEventListener("click", captureSample);
+    $("add-file").addEventListener("change", (e) => { if (e.target.files[0]) useUploadedPhoto(e.target.files[0]); e.target.value = ""; });
+    $("form-add").addEventListener("submit", saveStudent);
+
+    // Detail modal
+    $("btn-detail-mark").addEventListener("click", async () => {
+      if (!detailStudent) return;
+      try { await markPresent(detailStudent, "manual"); closeModal("modal-detail"); }
+      catch (e) { toast(e.message, "err"); }
+    });
+    $("btn-detail-delete").addEventListener("click", async () => {
+      if (!detailStudent || !confirm(`Delete ${detailStudent.name} and all their attendance records?`)) return;
+      try {
+        await api(`/api/students/${detailStudent.id}`, { method: "DELETE" });
+        toast("Student deleted");
+        closeModal("modal-detail");
+        await loadStudents();
+      } catch (e) { toast(e.message, "err"); }
+    });
+
+    // Close buttons + backdrop
+    document.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", () => closeModal(b.dataset.close)));
+    document.querySelectorAll(".modal").forEach((m) => m.addEventListener("click", (e) => { if (e.target === m) closeModal(m.id); }));
+
+    // Scan tab
+    $("btn-scan-toggle").addEventListener("click", () => (scanStream ? stopScan() : startScan()));
+    $("btn-scan-flip").addEventListener("click", async () => {
+      scanFacing = scanFacing === "environment" ? "user" : "environment";
+      if (scanStream) { stopScan(); await startScan(); }
+    });
+    $("present-list").addEventListener("click", async (e) => {
+      const btn = e.target.closest("[data-undo]");
+      if (!btn) return;
+      try {
+        await api(`/api/attendance/${btn.dataset.undo}`, { method: "DELETE" });
+        toast("Removed");
+        await Promise.all([loadPresent(), loadStudents()]);
+      } catch (err) { toast(err.message, "err"); }
+    });
+    $("manual-search").addEventListener("input", () => {
+      const q = $("manual-search").value.trim().toLowerCase();
+      const box = $("manual-results");
+      if (!q) { box.innerHTML = ""; return; }
+      const rows = students.filter((s) => !s.present_today && (s.name.toLowerCase().includes(q) || s.student_no.toLowerCase().includes(q))).slice(0, 6);
+      box.innerHTML = rows.map((s) => `
+        <li data-manual="${s.id}">
+          ${avatarHtml(s)}
+          <div class="info"><div class="name">${escapeHtml(s.name)}</div><div class="sub">${escapeHtml(s.student_no)}${s.grade ? " · " + escapeHtml(s.grade) : ""}</div></div>
+          <span class="badge present">Mark ✓</span>
+        </li>`).join("") || `<li><div class="info sub">No unmarked student matches</div></li>`;
+    });
+    $("manual-results").addEventListener("click", async (e) => {
+      const li = e.target.closest("[data-manual]");
+      if (!li) return;
+      const s = students.find((x) => x.id === Number(li.dataset.manual));
+      if (!s) return;
+      try { await markPresent(s, "manual"); $("manual-search").value = ""; $("manual-results").innerHTML = ""; }
+      catch (err) { toast(err.message, "err"); }
+    });
+
+    // Stop cameras when the page is hidden (saves battery, releases the camera)
+    document.addEventListener("visibilitychange", () => { if (document.hidden) { stopScan(); stopAddCam(); } });
+  }
+
+  // ------------------------------------------------------------------ boot
+  wire();
+  loadStudents().catch((e) => toast(e.message, "err"));
+  loadModels();
+})();
