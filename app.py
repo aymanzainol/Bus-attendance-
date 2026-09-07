@@ -52,7 +52,13 @@ STRINGS = {
         "sheet_daily": "اليومي",
         "sheet_log": "السجل",
         "summary_heading": "الملخص (سجل المسح الكامل موجود في ملف إكسل)",
-        "daily_heading": "الحضور اليومي (ح = حاضر، فارغ = غائب)",
+        "daily_heading": "الحضور اليومي",
+        "period_daily": "تقرير يومي",
+        "period_weekly": "تقرير أسبوعي",
+        "period_monthly": "تقرير شهري",
+        "period_custom": "تقرير لفترة مخصصة",
+        "status": "الحالة",
+        "time_in": "وقت الحضور",
         "no": "الرقم",
         "national_id": "رقم الهوية الوطنية",
         "name": "الاسم",
@@ -69,8 +75,8 @@ STRINGS = {
         "method": "الطريقة",
         "method_face": "وجه",
         "method_manual": "يدوي",
-        "mark_present": "ح",
-        "mark_absent": "غ",
+        "mark_present": "حاضر",
+        "mark_absent": "غائب",
     },
     "en": {
         "name_required": "Name is required",
@@ -96,7 +102,13 @@ STRINGS = {
         "sheet_daily": "Daily",
         "sheet_log": "Log",
         "summary_heading": "Summary (the full scan log is included in the Excel export)",
-        "daily_heading": "Daily attendance (P = present, blank = absent)",
+        "daily_heading": "Daily attendance",
+        "period_daily": "Daily report",
+        "period_weekly": "Weekly report",
+        "period_monthly": "Monthly report",
+        "period_custom": "Custom period report",
+        "status": "Status",
+        "time_in": "Time in",
         "no": "No",
         "national_id": "National ID",
         "name": "Name",
@@ -113,8 +125,8 @@ STRINGS = {
         "method": "Method",
         "method_face": "face",
         "method_manual": "manual",
-        "mark_present": "P",
-        "mark_absent": "A",
+        "mark_present": "Present",
+        "mark_absent": "Absent",
     },
 }
 
@@ -502,7 +514,7 @@ def delete_attendance(record_id):
 
 
 # ---------------------------------------------------------------------- export
-def build_report(start, end, bus_no=""):
+def build_report(start, end, bus_no="", period="custom"):
     """Collect everything the exporters need for the given inclusive date range (optionally one bus)."""
     db = get_db()
     if bus_no:
@@ -525,6 +537,8 @@ def build_report(start, end, bus_no=""):
             (start, end),
         ).fetchall()
     days = sorted({r["day"] for r in records})
+    if period == "daily":
+        days = [start]  # a daily report always shows its day, even if nobody was scanned
     by_student = {}
     for r in records:
         by_student.setdefault(r["student_id"], {})[r["day"]] = r["time"]
@@ -532,6 +546,7 @@ def build_report(start, end, bus_no=""):
         "start": start,
         "end": end,
         "bus_no": bus_no,
+        "period": period,
         "lang": current_lang(),
         "T": STRINGS[current_lang()],
         "students": [dict(s) for s in students],
@@ -544,11 +559,20 @@ def build_report(start, end, bus_no=""):
 
 def export_filename(report, ext):
     bus = f"_bus-{re.sub(r'[^A-Za-z0-9-]+', '', report['bus_no'])}" if report["bus_no"] else ""
-    return f"bus-attendance{bus}_{report['start']}_to_{report['end']}.{ext}"
+    if report["period"] == "daily":
+        return f"bus-attendance_{report['period']}{bus}_{report['start']}.{ext}"
+    return f"bus-attendance_{report['period']}{bus}_{report['start']}_to_{report['end']}.{ext}"
 
 
 def bus_from_args():
     return (request.args.get("bus") or "").strip()[:40]
+
+
+def period_from_args(start, end):
+    period = request.args.get("period") or ""
+    if period not in ("daily", "weekly", "monthly", "custom"):
+        period = "daily" if start == end else "custom"
+    return period
 
 
 @app.route("/api/export/excel")
@@ -560,12 +584,15 @@ def export_excel():
     start, end = range_from_args()
     if start is None:
         return jsonify({"error": msg("invalid_range")}), 400
-    report = build_report(start, end, bus_from_args())
+    report = build_report(start, end, bus_from_args(), period_from_args(start, end))
     days = report["days"]
     n_days = len(days)
     T = report["T"]
     rtl = report["lang"] == "ar"
+    daily = report["period"] == "daily"
     bus_title = f"  {T['bus']} {report['bus_no']}" if report["bus_no"] else ""
+    period_title = T["period_" + report["period"]]
+    when = start if daily else f"{start} - {end}"
 
     wb = Workbook()
     head_font = Font(bold=True, color="FFFFFF")
@@ -584,16 +611,27 @@ def export_excel():
     ws = wb.active
     ws.title = T["sheet_summary"]
     ws.sheet_view.rightToLeft = rtl
-    ws.append([f"{T['summary_title']}{bus_title}  ({start} - {end})"])
+    ws.append([f"{T['summary_title']} - {period_title}{bus_title}  ({when})"])
     ws["A1"].font = Font(bold=True, size=14)
     ws.append([f"{T['school_days']}: {n_days}    {T['students']}: {len(report['students'])}    {T['generated']}: {report['generated']}"])
     ws.append([])
-    ws.append([T["no"], T["national_id"], T["name"], T["grade"], T["bus"], T["parent_phone"], T["days_present"], T["days_absent"], T["pct"]])
+    if daily:
+        ws.append([T["no"], T["national_id"], T["name"], T["grade"], T["bus"], T["parent_phone"], T["status"], T["time_in"]])
+    else:
+        ws.append([T["no"], T["national_id"], T["name"], T["grade"], T["bus"], T["parent_phone"], T["days_present"], T["days_absent"], T["pct"]])
     style_header(ws, 4)
     for i, s in enumerate(report["students"], 1):
-        present = len(report["by_student"].get(s["id"], {}))
-        pct = round(100 * present / n_days, 1) if n_days else 0
-        ws.append([i, s["national_id"], s["name"], s["grade"], s["bus_no"], s["parent_phone"], present, n_days - present, pct])
+        marks = report["by_student"].get(s["id"], {})
+        if daily:
+            here = start in marks
+            ws.append([i, s["national_id"], s["name"], s["grade"], s["bus_no"], s["parent_phone"], T["mark_present"] if here else T["mark_absent"], marks.get(start, "")])
+            cell = ws.cell(row=ws.max_row, column=7)
+            cell.alignment = center
+            cell.fill = present_fill if here else absent_fill
+        else:
+            present = len(marks)
+            pct = round(100 * present / n_days, 1) if n_days else 0
+            ws.append([i, s["national_id"], s["name"], s["grade"], s["bus_no"], s["parent_phone"], present, n_days - present, pct])
     for col, width in zip("ABCDEFGHI", (6, 18, 30, 12, 10, 18, 14, 14, 14)):
         ws.column_dimensions[col].width = width
     ws.freeze_panes = "A5"
@@ -656,12 +694,14 @@ def export_pdf():
     start, end = range_from_args()
     if start is None:
         return jsonify({"error": msg("invalid_range")}), 400
-    report = build_report(start, end, bus_from_args())
+    report = build_report(start, end, bus_from_args(), period_from_args(start, end))
     days = report["days"]
     n_days = len(days)
     T = report["T"]
     rtl = report["lang"] == "ar"
+    daily = report["period"] == "daily"
     bus_title = f" – {T['bus']} {report['bus_no']}" if report["bus_no"] else ""
+    period_title = T["period_" + report["period"]]
     register_pdf_fonts()
     font, font_bold = "Amiri", "Amiri-Bold"
 
@@ -689,11 +729,11 @@ def export_pdf():
         if rtl and name != "Title":
             styles[name].alignment = 2  # right
     meta = (
-        f"{T['period']}: {start} - {end}   |   {T['school_days']}: {n_days}   |   "
+        f"{T['period']}: {start if daily else f'{start} - {end}'}   |   {T['school_days']}: {n_days}   |   "
         f"{T['students']}: {len(report['students'])}   |   {T['generated']}: {report['generated']}"
     )
     story = [
-        Paragraph(shape(f"{T['report_title']}{bus_title}"), styles["Title"]),
+        Paragraph(shape(f"{T['report_title']} – {period_title}{bus_title}"), styles["Title"]),
         Paragraph(shape(meta), styles["Normal"]),
         Spacer(1, 6 * mm),
     ]
@@ -711,43 +751,67 @@ def export_pdf():
         ]
     )
 
+    green, red = colors.HexColor("#0B6623"), colors.HexColor("#B91C1C")
+
+    def col(i, n):
+        """Column index i of an n-column row, accounting for the RTL mirroring done by cells()."""
+        return n - 1 - i if rtl else i
+
     # Summary table
-    data = [cells([T["no"], T["national_id"], T["name"], T["grade"], T["bus"], T["parent_phone"], T["present"], T["absent"], "%"])]
+    if daily:
+        head = [T["no"], T["national_id"], T["name"], T["grade"], T["bus"], T["parent_phone"], T["status"], T["time_in"]]
+        cw = [10 * mm, 34 * mm, 78 * mm, 20 * mm, 16 * mm, 36 * mm, 24 * mm, 22 * mm]
+    else:
+        head = [T["no"], T["national_id"], T["name"], T["grade"], T["bus"], T["parent_phone"], T["present"], T["absent"], "%"]
+        cw = [10 * mm, 34 * mm, 70 * mm, 20 * mm, 16 * mm, 34 * mm, 20 * mm, 20 * mm, 16 * mm]
+    data = [cells(head)]
+    extra = [("FONTSIZE", (0, 0), (-1, -1), 8)]
     for i, s in enumerate(report["students"], 1):
-        present = len(report["by_student"].get(s["id"], {}))
-        pct = f"{100 * present / n_days:.0f}%" if n_days else "-"
-        data.append(cells([i, s["national_id"], s["name"], s["grade"], s["bus_no"], s["parent_phone"], present, n_days - present, pct]))
-    table = Table(data, repeatRows=1, colWidths=widths([10 * mm, 34 * mm, 70 * mm, 20 * mm, 16 * mm, 34 * mm, 20 * mm, 20 * mm, 16 * mm]))
+        marks = report["by_student"].get(s["id"], {})
+        if daily:
+            here = start in marks
+            data.append(cells([i, s["national_id"], s["name"], s["grade"], s["bus_no"], s["parent_phone"], T["mark_present"] if here else T["mark_absent"], marks.get(start, "")]))
+            c = col(6, len(head))
+            extra.append(("TEXTCOLOR", (c, i), (c, i), green if here else red))
+            extra.append(("FONTNAME", (c, i), (c, i), font_bold))
+        else:
+            present = len(marks)
+            pct = f"{100 * present / n_days:.0f}%" if n_days else "-"
+            data.append(cells([i, s["national_id"], s["name"], s["grade"], s["bus_no"], s["parent_phone"], present, n_days - present, pct]))
+    table = Table(data, repeatRows=1, colWidths=widths(cw))
     table.setStyle(header_style)
-    table.setStyle(TableStyle([("FONTSIZE", (0, 0), (-1, -1), 8)]))
+    table.setStyle(TableStyle(extra))
     story.append(Paragraph(shape(T["summary_heading"]), styles["Heading2"]))
     story.append(table)
 
-    # Daily matrix (fits comfortably up to a month of school days)
-    if 0 < n_days <= 31:
+    # Daily attendance grid: full "present"/"absent" words, split into blocks of days so it always fits the page
+    if n_days > 0 and not daily:
         story.append(PageBreak())
         story.append(Paragraph(shape(T["daily_heading"]), styles["Heading2"]))
-        day_labels = [d[5:] for d in days]  # MM-DD
-        mdata = [cells([T["national_id"], T["name"], T["bus"]] + day_labels + [T["total"]])]
-        for s in report["students"]:
-            marks = report["by_student"].get(s["id"], {})
-            mdata.append(cells([s["national_id"], s["name"], s["bus_no"]] + [T["mark_present"] if d in marks else "" for d in days] + [len(marks)]))
-        avail = landscape(A4)[0] - 24 * mm - 32 * mm - 50 * mm - 14 * mm - 10 * mm
-        day_w = min(12 * mm, avail / n_days)
-        mtable = Table(mdata, repeatRows=1, colWidths=widths([32 * mm, 50 * mm, 14 * mm] + [day_w] * n_days + [10 * mm]))
-        mtable.setStyle(header_style)
-        # the day columns sit after the 3 identity columns (or before the mirrored ones in RTL)
-        day_first, day_last = (1, n_days) if rtl else (3, 2 + n_days)
-        mtable.setStyle(
-            TableStyle(
-                [
-                    ("FONTSIZE", (0, 0), (-1, -1), 6),
-                    ("ALIGN", (day_first, 0), (day_last, -1), "CENTER"),
-                    ("TEXTCOLOR", (day_first, 1), (day_last, -1), colors.HexColor("#0B6623")),
-                ]
-            )
-        )
-        story.append(mtable)
+        per_block = 8
+        for b in range(0, n_days, per_block):
+            block = days[b:b + per_block]
+            nb = len(block)
+            head = [T["national_id"], T["name"], T["bus"]] + block + [T["total"]]
+            mdata = [cells(head)]
+            mstyle = [("FONTSIZE", (0, 0), (-1, -1), 7)]
+            for j in range(nb):
+                c = col(3 + j, len(head))
+                mstyle.append(("ALIGN", (c, 0), (c, -1), "CENTER"))
+            for ri, s in enumerate(report["students"], 1):
+                marks = report["by_student"].get(s["id"], {})
+                mdata.append(cells([s["national_id"], s["name"], s["bus_no"]] + [T["mark_present"] if d in marks else T["mark_absent"] for d in block] + [len(marks)]))
+                for j, d in enumerate(block):
+                    c = col(3 + j, len(head))
+                    mstyle.append(("TEXTCOLOR", (c, ri), (c, ri), green if d in marks else red))
+            avail = landscape(A4)[0] - 24 * mm - 32 * mm - 50 * mm - 14 * mm - 12 * mm
+            day_w = min(22 * mm, avail / nb)
+            mtable = Table(mdata, repeatRows=1, colWidths=widths([32 * mm, 50 * mm, 14 * mm] + [day_w] * nb + [12 * mm]))
+            mtable.setStyle(header_style)
+            mtable.setStyle(TableStyle(mstyle))
+            story.append(mtable)
+            if b + per_block < n_days:
+                story.append(PageBreak())
 
     doc.build(story)
     buf.seek(0)

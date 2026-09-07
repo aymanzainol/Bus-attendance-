@@ -29,10 +29,23 @@
 
     <section class="card">
       <h2 data-i18n="export_title">تصدير الحضور</h2>
-      <div class="row">
+      <div class="seg" id="period-seg">
+        <button type="button" class="seg-btn active" data-period="daily" data-i18n="period_daily">يومي</button>
+        <button type="button" class="seg-btn" data-period="weekly" data-i18n="period_weekly">أسبوعي</button>
+        <button type="button" class="seg-btn" data-period="monthly" data-i18n="period_monthly">شهري</button>
+        <button type="button" class="seg-btn" data-period="custom" data-i18n="period_custom">مخصص</button>
+      </div>
+      <div class="row" id="grp-day">
+        <label><span id="lbl-day" data-i18n="day">اليوم</span> <input type="date" id="export-day"></label>
+      </div>
+      <div class="row hidden" id="grp-month">
+        <label><span data-i18n="month">الشهر</span> <input type="month" id="export-month"></label>
+      </div>
+      <div class="row hidden" id="grp-custom">
         <label><span data-i18n="from">من</span> <input type="date" id="export-from"></label>
         <label><span data-i18n="to">إلى</span> <input type="date" id="export-to"></label>
       </div>
+      <div class="range-caption" id="range-caption"></div>
       <div class="row">
         <label><span data-i18n="bus">الحافلة</span> <select id="export-bus"><option value="">كل الحافلات</option></select></label>
       </div>

@@ -12,7 +12,7 @@ Two tabs only:
 
 | Tab | What it does |
 | --- | --- |
-| **Students** | Add a student (name, national ID, class, bus number, parent phone) and register their face with the phone camera or an uploaded photo. See who is present/absent today, attendance history per student, filter by bus, and export a date range (all buses or one bus) to Excel / PDF. |
+| **Students** | Add a student (name, national ID, class, bus number, parent phone) and register their face with the phone camera or an uploaded photo. See who is present/absent today, attendance history per student, filter by bus, and export a **daily, weekly, monthly or custom** report (all buses or one bus) to Excel / PDF. |
 | **Scan** | Live camera. Every recognised face is marked present automatically (once per day). Shows today's present list with undo, plus a manual-mark search for students the camera cannot see. |
 
 ## How it works
@@ -26,9 +26,11 @@ Two tabs only:
 * The Flask backend (`app.py`) stores students, their face descriptors and
   attendance in SQLite, and produces the exports with **openpyxl** and
   **reportlab**.
-* Excel export has three sheets: `Summary` (present/absent/% per student),
-  `Daily` (student × date matrix, P/A) and `Log` (every scan with time).
-  The PDF contains the summary and the daily matrix.
+* Excel export has three sheets: `Summary` (present/absent/% per student, or
+  status + time-in for a daily report), `Daily` (student × date grid with
+  حاضر / غائب per day) and `Log` (every scan with time). The PDF contains the
+  summary and the daily grid (split into blocks of days so it always fits).
+  Weeks start on Sunday (`WEEK_START` in `static/app.js`).
 
 ## Run locally
 
@@ -60,5 +62,5 @@ Error messages from the API follow the `X-Lang` header (`ar` default, `en`).
 | GET | `/api/attendance?date=` | Records for a day |
 | POST | `/api/attendance` | Mark present (`student_id`, `day`, `time`, `method`) |
 | DELETE | `/api/attendance/<id>` | Undo a record |
-| GET | `/api/export/excel?from=&to=&bus=&lang=` | Excel workbook (`bus`, `lang` optional) |
-| GET | `/api/export/pdf?from=&to=&bus=&lang=` | PDF report (`bus`, `lang` optional) |
+| GET | `/api/export/excel?from=&to=&period=&bus=&lang=` | Excel workbook (`period` = daily/weekly/monthly/custom) |
+| GET | `/api/export/pdf?from=&to=&period=&bus=&lang=` | PDF report (same parameters) |

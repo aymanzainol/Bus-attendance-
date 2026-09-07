@@ -473,12 +473,47 @@
   }
 
   // ---------------------------------------------------------------- export
+  const WEEK_START = 0; // 0 = Sunday, 1 = Monday
+  let period = "daily";
+  function isoDate(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+  function exportRange() {
+    if (period === "daily") {
+      const d = $("export-day").value || todayStr();
+      return { from: d, to: d };
+    }
+    if (period === "weekly") {
+      const d = new Date(($("export-day").value || todayStr()) + "T00:00:00");
+      const diff = (d.getDay() - WEEK_START + 7) % 7;
+      const from = new Date(d); from.setDate(d.getDate() - diff);
+      const to = new Date(from); to.setDate(from.getDate() + 6);
+      return { from: isoDate(from), to: isoDate(to) };
+    }
+    if (period === "monthly") {
+      const m = $("export-month").value || todayStr().slice(0, 7);
+      const [y, mo] = m.split("-").map(Number);
+      const last = new Date(y, mo, 0).getDate();
+      return { from: `${m}-01`, to: `${m}-${String(last).padStart(2, "0")}` };
+    }
+    return { from: $("export-from").value || monthStart(), to: $("export-to").value || todayStr() };
+  }
+  function setPeriod(p) {
+    period = p;
+    document.querySelectorAll("#period-seg .seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.period === p));
+    $("grp-day").classList.toggle("hidden", !(p === "daily" || p === "weekly"));
+    $("grp-month").classList.toggle("hidden", p !== "monthly");
+    $("grp-custom").classList.toggle("hidden", p !== "custom");
+    $("lbl-day").textContent = t(p === "weekly" ? "week_of" : "day");
+    updateExportLinks();
+  }
   function updateExportLinks() {
-    const from = $("export-from").value || monthStart();
-    const to = $("export-to").value || todayStr();
+    const { from, to } = exportRange();
     const bus = encodeURIComponent($("export-bus").value || "");
-    $("btn-excel").href = `/api/export/excel?from=${from}&to=${to}&bus=${bus}&lang=${getLang()}`;
-    $("btn-pdf").href = `/api/export/pdf?from=${from}&to=${to}&bus=${bus}&lang=${getLang()}`;
+    const q = `from=${from}&to=${to}&bus=${bus}&period=${period}&lang=${getLang()}`;
+    $("btn-excel").href = `/api/export/excel?${q}`;
+    $("btn-pdf").href = `/api/export/pdf?${q}`;
+    $("range-caption").innerHTML = t("range_caption", { from: `<span class="ltr">${from}</span>`, to: `<span class="ltr">${to}</span>` });
   }
 
   // ---------------------------------------------------------------- wiring
@@ -500,12 +535,13 @@
       if (li) openDetail(Number(li.dataset.id));
     });
     $("btn-add").addEventListener("click", () => { resetAddForm(); openModal("modal-add"); });
+    $("export-day").value = todayStr();
+    $("export-month").value = todayStr().slice(0, 7);
     $("export-from").value = monthStart();
     $("export-to").value = todayStr();
-    $("export-from").addEventListener("change", updateExportLinks);
-    $("export-to").addEventListener("change", updateExportLinks);
-    $("export-bus").addEventListener("change", updateExportLinks);
-    updateExportLinks();
+    ["export-day", "export-month", "export-from", "export-to", "export-bus"].forEach((id) => $(id).addEventListener("change", updateExportLinks));
+    $("period-seg").addEventListener("click", (e) => { const b = e.target.closest("[data-period]"); if (b) setPeriod(b.dataset.period); });
+    setPeriod("daily");
 
     // Bus filter chips (both tabs share the same filter)
     ["bus-chips", "scan-bus-chips"].forEach((id) =>
@@ -586,6 +622,7 @@
       $("btn-scan-toggle").textContent = scanStream ? t("stop_camera") : t("start_camera");
       $("btn-add-cam").textContent = addStream ? t("flip") : t("camera");
       updateSamplesLabel();
+      setPeriod(period);
       renderBusChips();
       renderStudents();
       renderStats();
